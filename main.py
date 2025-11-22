@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import base64
+import json
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
@@ -9,6 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BufferedInputFile
 from aiogram.filters import Command
 from google import genai
+from google.genai import types # <--- ДОБАВЛЕН ИМПОРТ TYPES
 from google.genai.errors import APIError
 from aiohttp import web 
 
@@ -123,10 +125,13 @@ async def handle_photo(message: types.Message):
 
     try:
         # --- Шаг 1: Улучшение и перевод промпта (Текстовая модель) ---
+        # ИСПРАВЛЕНИЕ: Передача system_instruction через объект config
         text_response = gemini_client.models.generate_content(
             model=TEXT_MODEL,
             contents=[original_prompt],
-            system_instruction=PROMPT_ENHANCER_SYSTEM_INSTRUCTION
+            config=types.GenerateContentConfig(
+                system_instruction=PROMPT_ENHANCER_SYSTEM_INSTRUCTION
+            )
         )
         
         enhanced_prompt = text_response.text.strip()
@@ -187,7 +192,8 @@ async def handle_photo(message: types.Message):
                              f"Детали: `{e}`")
     except Exception as e:
         logger.error(f"Неизвестная ошибка: {e}")
-        await message.answer(f"❌ **Критическая ошибка:** Что-то пошло не так при обработке запроса. `{e}`")
+        # Возвращаем общую ошибку, но логгируем детали
+        await message.answer(f"❌ **Критическая ошибка:** Что-то пошло не так при обработке запроса. Детали: `{e}`") 
     finally:
         # Удаление сообщения о статусе после завершения работы
         try:
@@ -236,14 +242,40 @@ async def main():
     
     async def webhook_handler(request: web.Request):
         """Обрабатывает входящие POST-запросы от Telegram."""
-        # Проверка секретного токена
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET_TOKEN:
-             return web.Response(status=403, text="Invalid secret token")
         
-        # Передача обновления диспетчеру aiogram
-        update = types.Update.model_validate(await request.json(), context={"bot": bot})
-        await dp.feed_update(bot, update)
-        return web.Response(text="OK")
+        # --- Усиленное логирование ---
+        try:
+            # Логируем входящий POST-запрос
+            logger.info(f"Получен POST-запрос на {WEBHOOK_PATH}.")
+            
+            # Проверка секретного токена
+            if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET_TOKEN:
+                 logger.error("❌ Ошибка: Неверный секретный токен вебхука.")
+                 return web.Response(status=403, text="Invalid secret token")
+            
+            # Получение и валидация данных
+            json_data = await request.json()
+            # Убедимся, что данные есть
+            if not json_data:
+                logger.warning("Пустое тело запроса от Telegram.")
+                return web.Response(text="OK")
+            
+            # Валидация обновления и передача диспетчеру aiogram
+            update = types.Update.model_validate(json_data, context={"bot": bot})
+            await dp.feed_update(bot, update)
+            
+            logger.info("Обновление обработано успешно.")
+            return web.Response(text="OK")
+            
+        except json.JSONDecodeError:
+            logger.error("❌ ОШИБКА ОБРАБОТКИ ВЕБХУКА: Неверный формат JSON.")
+            return web.Response(text="OK (JSON Error)")
+        except Exception as e:
+            # Это поймает любые ошибки, которые произошли внутри aiogram при обработке
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА ОБРАБОТКИ ВЕБХУКА: {e}", exc_info=True)
+            # Важно: всегда возвращать 200 OK, даже если произошла ошибка, чтобы Telegram не пытался повторить запрос
+            return web.Response(text="OK (Internal Error, see logs)")
+
 
     async def health_check_handler(request: web.Request):
         """Хэндлер для проверки работоспособности сервиса."""
