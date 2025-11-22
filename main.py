@@ -69,7 +69,7 @@ def generate_image_gemini(prompt):
         return None
 
 def generate_with_imagen3(prompt):
-    """Генерация через Imagen 3 REST API"""
+    """Генерация через Imagen 3 REST API с правильной структурой"""
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateContent?key={GEMINI_API_KEY}"
         
@@ -77,6 +77,7 @@ def generate_with_imagen3(prompt):
             'Content-Type': 'application/json'
         }
         
+        # ПРАВИЛЬНАЯ структура для Imagen 3
         data = {
             "contents": [
                 {
@@ -87,9 +88,9 @@ def generate_with_imagen3(prompt):
                     ]
                 }
             ],
-            "generationConfig": {
-                "numberOfImages": 1,
-                "aspectRatio": "1:1"
+            "generation_config": {
+                "number_of_images": 1,  # Правильное имя параметра
+                "aspect_ratio": "1:1"   # Правильное имя параметра
             }
         }
         
@@ -122,7 +123,7 @@ def generate_with_imagen3(prompt):
             if "quota" in error_text.lower():
                 return "❌ Закончилась квота API. Проверь лимиты в Google AI Studio."
             elif "invalid" in error_text.lower():
-                return "❌ Неверный запрос. Попробуй другой промпт."
+                return "❌ Неверный запрос или параметры. Попробуй другой промпт."
             else:
                 return f"❌ Ошибка API: {error_text[:100]}"
             
