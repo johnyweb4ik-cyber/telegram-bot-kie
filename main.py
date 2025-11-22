@@ -31,6 +31,22 @@ async def setup_webhook():
 # Запускаем установку вебхука при старте
 asyncio.run(setup_webhook())
 
+# Асинхронная обработка сообщений
+async def process_message(chat_id, text):
+    try:
+        if text == '/start':
+            await bot.send_message(chat_id, "🎨 Бот работает! Команды активны")
+        elif text == '/help':
+            await bot.send_message(chat_id, "📖 Помощь: используй команды из меню")
+        elif text == '/balance':
+            await bot.send_message(chat_id, "💰 Баланс: 10 кредитов")
+        elif text == '/generate':
+            await bot.send_message(chat_id, "📝 Опиши картинку...")
+        else:
+            await bot.send_message(chat_id, f"📝 Получил: {text}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки: {e}")
+
 @app.route('/')
 def home():
     return "Бот работает! ✅ Вебхук настроен"
@@ -51,17 +67,8 @@ def webhook():
                 text = update.message.text
                 logger.info(f"💬 Сообщение: {text} от {chat_id}")
                 
-                # Обрабатываем синхронно
-                if text == '/start':
-                    bot.send_message(chat_id, "🎨 Бот работает! Команды активны")
-                elif text == '/help':
-                    bot.send_message(chat_id, "📖 Помощь: используй команды из меню")
-                elif text == '/balance':
-                    bot.send_message(chat_id, "💰 Баланс: 10 кредитов")
-                elif text == '/generate':
-                    bot.send_message(chat_id, "📝 Опиши картинку...")
-                else:
-                    bot.send_message(chat_id, f"📝 Получил: {text}")
+                # Запускаем асинхронную обработку
+                asyncio.run(process_message(chat_id, text))
             
             return 'ok'
             
