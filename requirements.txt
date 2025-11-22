@@ -3,3 +3,4 @@ aiogram
 google-genai
 pillow
 aiohttp  # Нужен для работы Webhook
+python-dotenv
