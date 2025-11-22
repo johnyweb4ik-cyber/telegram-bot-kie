@@ -1,5 +1,5 @@
 flask==2.3.3
 requests==2.31.0
 gunicorn==21.2.0
-google-genai==0.3.0  # Добавляем официальную библиотеку
-Pillow==10.0.1       # Для работы с изображениями
+google-generativeai==0.3.2
+pillow==10.0.1
