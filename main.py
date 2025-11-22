@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import asyncio
 from flask import Flask, request
 from telegram import Bot, Update
 
@@ -13,29 +14,26 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 KIE_API_KEY = os.environ.get('KIE_API_KEY')
 
 logger.info(f"BOT_TOKEN exists: {BOT_TOKEN is not None}")
-logger.info(f"KIE_API_KEY exists: {KIE_API_KEY is not None}")
 
+# Создаем бота
 bot = Bot(token=BOT_TOKEN)
 
-webhook_set = False
+# Устанавливаем вебхук асинхронно
+async def setup_webhook():
+    try:
+        RENDER_URL = "https://telegram-bot-kie.onrender.com"
+        webhook_url = f"{RENDER_URL}/webhook"
+        await bot.set_webhook(webhook_url)
+        logger.info(f"✅ Webhook установлен: {webhook_url}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка вебхука: {e}")
+
+# Запускаем установку вебхука при старте
+asyncio.run(setup_webhook())
 
 @app.route('/')
 def home():
-    global webhook_set
-    RENDER_URL = "https://telegram-bot-kie.onrender.com"
-    webhook_url = f"{RENDER_URL}/webhook"
-    
-    if not webhook_set:
-        try:
-            bot.set_webhook(webhook_url)
-            logger.info(f"✅ Webhook установлен: {webhook_url}")
-            webhook_set = True
-            return "Бот работает! ✅ Вебхук активен"
-        except Exception as e:
-            logger.error(f"Webhook error: {e}")
-            return f"Бот работает! ❌ Ошибка: {e}"
-    else:
-        return "Бот работает! ✅ Вебхук активен"
+    return "Бот работает! ✅ Вебхук настроен"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -44,7 +42,7 @@ def webhook():
     if request.method == 'POST':
         try:
             update_data = request.get_json()
-            logger.info(f"📦 Данные от Telegram: {update_data}")
+            logger.info(f"📦 Данные: {update_data}")
             
             update = Update.de_json(update_data, bot)
             
@@ -53,17 +51,22 @@ def webhook():
                 text = update.message.text
                 logger.info(f"💬 Сообщение: {text} от {chat_id}")
                 
+                # Обрабатываем синхронно
                 if text == '/start':
-                    logger.info("🔄 Обработка /start")
                     bot.send_message(chat_id, "🎨 Бот работает! Команды активны")
+                elif text == '/help':
+                    bot.send_message(chat_id, "📖 Помощь: используй команды из меню")
+                elif text == '/balance':
+                    bot.send_message(chat_id, "💰 Баланс: 10 кредитов")
+                elif text == '/generate':
+                    bot.send_message(chat_id, "📝 Опиши картинку...")
                 else:
-                    logger.info(f"🔄 Обработка текста: {text}")
                     bot.send_message(chat_id, f"📝 Получил: {text}")
             
             return 'ok'
             
         except Exception as e:
-            logger.error(f"❌ Ошибка в webhook: {e}")
+            logger.error(f"❌ Ошибка: {e}")
             return 'error'
 
 if __name__ == '__main__':
