@@ -1,7 +1,6 @@
 import os
 import logging
 import requests
-import asyncio
 from flask import Flask, request
 from telegram import Bot, Update
 
@@ -18,34 +17,78 @@ logger.info(f"BOT_TOKEN exists: {BOT_TOKEN is not None}")
 # Создаем бота
 bot = Bot(token=BOT_TOKEN)
 
-# Устанавливаем вебхук асинхронно
-async def setup_webhook():
+# Синхронная установка вебхука
+def setup_webhook():
     try:
         RENDER_URL = "https://telegram-bot-kie.onrender.com"
         webhook_url = f"{RENDER_URL}/webhook"
-        await bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
+        
+        # Используем низкоуровневый HTTP запрос для установки вебхука
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+            json={"url": webhook_url}
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"✅ Webhook установлен: {webhook_url}")
+        else:
+            logger.error(f"❌ Ошибка вебхука: {response.text}")
+            
     except Exception as e:
         logger.error(f"❌ Ошибка вебхука: {e}")
 
-# Запускаем установку вебхука при старте
-asyncio.run(setup_webhook())
+# Устанавливаем вебхук при старте
+setup_webhook()
 
-# Асинхронная обработка сообщений
-async def process_message(chat_id, text):
+# Синхронная обработка сообщений
+def process_message(chat_id, text):
     try:
         if text == '/start':
-            await bot.send_message(chat_id, "🎨 Бот работает! Команды активны")
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "🎨 Бот работает! Команды активны\n\n/generate - создать изображение\n/balance - проверить баланс\n/help - помощь"
+                }
+            )
         elif text == '/help':
-            await bot.send_message(chat_id, "📖 Помощь: используй команды из меню")
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id, 
+                    "text": "📖 Просто отправь описание картинки или используй /generate"
+                }
+            )
         elif text == '/balance':
-            await bot.send_message(chat_id, "💰 Баланс: 10 кредитов")
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "💰 Баланс: 10 тестовых кредитов"
+                }
+            )
         elif text == '/generate':
-            await bot.send_message(chat_id, "📝 Опиши картинку...")
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
+                json={
+                    "chat_id": chat_id,
+                    "text": "📝 Напиши описание картинки...\n\nНапример: 'Кот в космосе' или 'Город будущего'"
+                }
+            )
         else:
-            await bot.send_message(chat_id, f"📝 Получил: {text}")
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": f"🎨 Скоро я сгенерирую: '{text}'\n\nСейчас в разработке..."
+                }
+            )
+            
+        if response.status_code != 200:
+            logger.error(f"❌ Ошибка отправки: {response.text}")
+            
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки: {e}")
+        logger.error(f"❌ Ошибка обработки: {e}")
 
 @app.route('/')
 def home():
@@ -58,17 +101,14 @@ def webhook():
     if request.method == 'POST':
         try:
             update_data = request.get_json()
-            logger.info(f"📦 Данные: {update_data}")
             
-            update = Update.de_json(update_data, bot)
-            
-            if update.message:
-                chat_id = update.message.chat.id
-                text = update.message.text
+            if 'message' in update_data:
+                chat_id = update_data['message']['chat']['id']
+                text = update_data['message']['text']
                 logger.info(f"💬 Сообщение: {text} от {chat_id}")
                 
-                # Запускаем асинхронную обработку
-                asyncio.run(process_message(chat_id, text))
+                # Обрабатываем сообщение
+                process_message(chat_id, text)
             
             return 'ok'
             
