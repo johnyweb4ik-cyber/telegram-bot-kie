@@ -10,16 +10,16 @@ from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 from aiohttp import web
 
+# Импорт клиента GenAI (убедитесь, что установлен google-genai)
 from google import genai
 from google.genai import types
 from PIL import Image
 
 # --- 1. Настройка и Константы ---
 
-# Загрузка переменных окружения из файла .env
+# Загрузка переменных окружения
 load_dotenv()
 
-# Получение ключей из переменных окружения
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
@@ -32,7 +32,6 @@ logger = logging.getLogger('generator')
 
 # Константы для Imagen
 IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
-# Формируем полный путь вебхука
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
 
 # --- 2. Класс для Генерации Изображений ---
@@ -42,7 +41,7 @@ class ImageGenerator:
     
     def __init__(self, api_key: str, model_name: str):
         if not api_key:
-            logger.error("GEMINI_API_KEY не установлен.")
+            logger.error("❌ GEMINI_API_KEY не установлен.")
             self.client = None
             return
             
@@ -56,7 +55,6 @@ class ImageGenerator:
         if not self.client:
             return None
         
-        # Конфигурация генерации
         config = types.GenerateImagesConfig(
             number_of_images=1,
             aspect_ratio="1:1"
@@ -65,7 +63,6 @@ class ImageGenerator:
         logger.info(f"Запрос генерации изображения: {prompt}...")
         
         try:
-            # Вызов API для генерации изображений
             response = await self.client.models.generate_images_async(
                 model=self.model,
                 prompt=prompt,
@@ -166,18 +163,19 @@ async def main():
     
     logger.info("Инициализация генератора и установка Webhook...")
     
-    # 2. Установка Webhook URL
     full_webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+    
+    # 2. Установка Webhook URL
+    # Сначала удалим, чтобы избежать конфликтов при перезапусках
+    await bot.delete_webhook() 
     await bot.set_webhook(url=full_webhook_url)
     logger.info(f"Webhook установлен на URL: {full_webhook_url}")
 
     # 3. Настройка и запуск aiohttp-сервера
     app = web.Application()
     
-    # !!! ИСПРАВЛЕННАЯ СТРОКА: Использование dp.get_web_app_factory() для Aiogram v3 !!!
-    app.router.add_route(
-        "POST", WEBHOOK_PATH, dp.get_web_app_factory()
-    )
+    # !!! САМЫЙ НАДЕЖНЫЙ МЕТОД ДЛЯ AIOGRAM 3.x и aiohttp !!!
+    dp.setup_webhook(app, WEBHOOK_PATH)
     
     runner = web.AppRunner(app)
     await runner.setup()
