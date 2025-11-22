@@ -7,9 +7,10 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BufferedInputFile
+from aiogram.filters import Command # <-- ИСПРАВЛЕНИЕ: Импортируем Command из aiogram.filters
 from google import genai
 from google.genai.errors import APIError
-from aiohttp import web # Импорт для aiohttp сервера
+from aiohttp import web 
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO,
@@ -17,24 +18,19 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения (для локального запуска)
-# На хостинге (Render) это не требуется, так как переменные устанавливаются в конфигурации.
 load_dotenv()
 
 # --- Константы и конфигурация ---
-# Токен вашего Telegram-бота
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# API-ключ Gemini
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# URL, предоставленный хостингом (например, Render)
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
-# Путь для вебхука
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 # Модели
-TEXT_MODEL = "gemini-2.5-flash-preview-09-2025"  # Для улучшения промпта и перевода
-IMAGE_MODEL = "gemini-2.5-flash-image"          # Для генерации изображения
+TEXT_MODEL = "gemini-2.5-flash-preview-09-2025"  
+IMAGE_MODEL = "gemini-2.5-flash-image"         
 
 # Системная инструкция для улучшения промпта (Про́мпт-инженер)
 PROMPT_ENHANCER_SYSTEM_INSTRUCTION = (
@@ -67,7 +63,7 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN,
 
 # --- Хэндлеры ---
 
-@dp.message(types.Command(commands=["start"]))
+@dp.message(Command("start")) # <-- ИСПРАВЛЕНИЕ
 async def handle_start(message: types.Message):
     """Обрабатывает команду /start, отправляя приветственное сообщение."""
     greeting_text = (
@@ -79,7 +75,7 @@ async def handle_start(message: types.Message):
     )
     await message.answer(greeting_text)
 
-@dp.message(types.Command(commands=["photo"]))
+@dp.message(Command("photo")) # <-- ИСПРАВЛЕНИЕ
 async def handle_photo(message: types.Message):
     """
     Основной хэндлер. 
@@ -91,7 +87,13 @@ async def handle_photo(message: types.Message):
         await message.answer("❌ **Ошибка:** Сервис генерации изображений не инициализирован (проверьте GEMINI_API_KEY).")
         return
         
-    original_prompt = message.text.replace("/photo", "").strip()
+    # Извлекаем промпт, чтобы не зависеть от синтаксиса Command
+    if message.text.lower().startswith('/photo'):
+        original_prompt = message.text[len('/photo'):].strip()
+    else:
+        # Это запасной вариант, если Command пропустит что-то неожиданное
+        original_prompt = message.text.strip()
+
 
     if not original_prompt:
         await message.answer("❌ **Ошибка:** Пожалуйста, укажите описание для изображения после команды `/photo`.\n"
@@ -206,7 +208,7 @@ async def set_telegram_webhook():
     logger.info(f"Установка вебхука на: {WEBHOOK_URL}")
     await bot.set_webhook(
         url=WEBHOOK_URL,
-        secret_token=TELEGRAM_BOT_TOKEN # Использование секретного токена для безопасности
+        secret_token=TELEGRAM_BOT_TOKEN 
     )
     logger.info(f"✅ Вебхук установлен: {WEBHOOK_URL}")
 
