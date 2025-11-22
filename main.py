@@ -8,7 +8,7 @@ from io import BytesIO
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile, Update # Добавлен Update
 from aiogram.filters import Command
-from aiohttp import web
+from aiohttp import web # Импорт aiohttp для работы с вебхуками
 
 from google import genai
 from google.genai import types
@@ -17,7 +17,7 @@ from PIL import Image
 # --- 1. Настройка и Константы ---
 load_dotenv()
 
-# Убедитесь, что эти переменные установлены в Render.com
+# Переменные окружения
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
@@ -31,8 +31,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(levelname)s:%(name
 logger = logging.getLogger('generator')
 
 IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
-# Формируем путь для вебхука, используя токен для уникальности
-WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
+# Путь для вебхука будет иметь вид /webhook/<токен>, это важно для aiohttp.router
+# WEBHOOK_PATH не используется напрямую в роутере, но используется в on_startup
+# для формирования полного URL.
 
 # --- 2. Класс для Генерации Изображений ---
 
@@ -63,6 +64,7 @@ class ImageGenerator:
         logger.info(f"Запрос генерации изображения: {prompt}...")
         
         try:
+            # Использование асинхронного клиента Google GenAI
             response = await self.client.models.generate_images_async(
                 model=self.model,
                 prompt=prompt,
@@ -119,20 +121,24 @@ async def handle_photo(message: Message):
         await message.answer("❌ Бот не может генерировать изображения. Проверьте API-ключ Google.")
         return
 
+    # Извлекаем промпт
     prompt = message.text.split(' ', 1)[1].strip()
     
     if not prompt:
         await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.")
         return
 
+    # Отправляем сообщение о начале генерации
     status_message = await message.answer(f"⏳ Генерирую изображение по описанию: *{prompt}*...", parse_mode='Markdown')
     
+    # Вызываем генератор
     image_bytes = await image_generator.generate_image(prompt)
     
+    # Удаляем статусное сообщение
     await bot.delete_message(message.chat.id, status_message.message_id)
 
     if image_bytes:
-        # FSInputFile позволяет передавать байты из памяти
+        # Отправляем сгенерированное изображение
         image_file = FSInputFile(BytesIO(image_bytes), filename='generated_image.png')
         await message.answer_photo(
             photo=image_file,
@@ -150,12 +156,12 @@ async def handle_photo_no_prompt(message: Message):
     await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.\n\nПример: **/photo a robot holding a red skateboard**")
 
 
-# --- 4. Запуск Сервера (ФИНАЛЬНЫЙ МЕТОД: Прямое управление Aiohttp/Aiogram v3) ---
+# --- 4. Запуск Сервера (Финальный низкоуровневый Aiohttp/Aiogram v3) ---
 
 async def handle_telegram_updates(request: web.Request):
     """
-    Обрабатывает входящие обновления от Telegram и передает их диспетчеру.
-    Путь в aiohttp должен содержать переменную '{token}'
+    Обрабатывает входящие обновления от Telegram, проверяет токен
+    и передает их диспетчеру aiogram.
     """
     # Проверяем токен в URL для безопасности, сравнивая с фактическим токеном бота
     if request.match_info.get("token") != TELEGRAM_BOT_TOKEN:
@@ -163,12 +169,11 @@ async def handle_telegram_updates(request: web.Request):
         
     data = await request.json()
     
-    # Прямая передача данных обновления диспетчеру
     try:
-        # Создаем объект Update из полученных данных
+        # Создаем объект Update из полученных данных Pydantic (aiogram v3)
         update = Update.model_validate(data)
         
-        # Aiogram 3.x использует process_update
+        # Aiogram 3.x использует process_update для обработки
         await dp.process_update(update, bot=bot)
         
     except Exception as e:
@@ -179,62 +184,57 @@ async def handle_telegram_updates(request: web.Request):
     return web.Response(text="OK")
 
 
-async def on_startup(app):
-    """Вызывается при запуске aiohttp-приложения."""
+async def on_startup(app: web.Application):
+    """Хук aiohttp: Устанавливает Webhook URL при запуске."""
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
-        logger.error("❌ Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL.")
+        logger.error("❌ Критическая ошибка: Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL.")
+        # Здесь можно добавить логику для остановки приложения
         return
         
-    # Путь вебхука на Render должен содержать токен в качестве переменной
+    # Путь вебхука в Telegram должен содержать токен для маршрутизации
     full_webhook_url = f"{WEBHOOK_URL}/webhook/{TELEGRAM_BOT_TOKEN}"
     
-    # 1. Установка Webhook URL
     await bot.delete_webhook()
     await bot.set_webhook(url=full_webhook_url)
     logger.info(f"Webhook установлен на URL: {full_webhook_url}")
 
-async def on_shutdown(app):
-    """Вызывается при завершении aiohttp-приложения."""
+async def on_shutdown(app: web.Application):
+    """Хук aiohttp: Удаляет Webhook и завершает работу диспетчера."""
     logger.info("Удаление Webhook...")
     await bot.delete_webhook()
     logger.info("Webhook удален.")
+    # Закрытие сессий диспетчера
     await dp.shutdown()
 
-async def main():
-    """Основная функция запуска бота, настроенная для Webhook на Render.com."""
+
+def main():
+    """Синхронная функция, запускающая aiohttp-приложение."""
     
     app = web.Application()
     
-    # 2. Прямая регистрация хэндлера обновления (самый низкий уровень v3)
-    # Используем путь с переменной токена, чтобы aiohttp передал его в хэндлер
+    # 1. Прямая регистрация POST-маршрута с переменной токена
+    # Это ключевой шаг, который обходит проблемные методы Диспетчера.
     app.router.add_post(f"/webhook/{{token}}", handle_telegram_updates)
             
-    
-    # Настройка хуков жизненного цикла aiohttp
+    # 2. Настройка хуков жизненного цикла aiohttp
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
     
-    # Запуск сервера
-    runner = web.AppRunner(app)
-    await runner.setup()
+    logger.info("Инициализация генератора и запуск сервера...")
     
-    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
-    
-    try:
-        await site.start()
-        logger.info(f"======== Running on http://{WEB_SERVER_HOST}:{WEB_SERVER_PORT} ========")
-        # Удерживаем main() в рабочем состоянии
-        await asyncio.Event().wait() 
-    finally:
-        # Очистка Webhook и ресурсов при завершении
-        await bot.delete_webhook()
-        logger.info("Webhook удален. Очистка завершена.")
-        await runner.cleanup()
+    # web.run_app является блокирующим и запускает цикл asyncio.
+    # Это самый надежный способ для продакшен-среды Render.
+    web.run_app(
+        app,
+        host=WEB_SERVER_HOST,
+        port=WEB_SERVER_PORT
+    )
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        # Запускаем синхронную main
+        main()
     except KeyboardInterrupt:
         logger.info("Бот остановлен вручную.")
     except Exception as e:
