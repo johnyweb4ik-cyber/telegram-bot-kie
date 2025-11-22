@@ -13,27 +13,25 @@ KIE_API_KEY = os.environ.get('KIE_API_KEY')
 
 bot = Bot(token=BOT_TOKEN)
 
-# Устанавливаем вебхук при первом запросе
-@app.before_first_request
-def setup_webhook():
-    RENDER_URL = "https://telegram-bot-kie.onrender.com"
-    webhook_url = f"{RENDER_URL}/webhook"
-    try:
-        bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка вебхука: {e}")
+# Флаг для отслеживания установки вебхука
+webhook_set = False
 
 @app.route('/')
 def home():
-    # При заходе на главную страницу устанавливаем вебхук
+    global webhook_set
     RENDER_URL = "https://telegram-bot-kie.onrender.com"
     webhook_url = f"{RENDER_URL}/webhook"
-    try:
-        bot.set_webhook(webhook_url)
-        return "Бот работает! ✅ Вебхук установлен"
-    except Exception as e:
-        return f"Бот работает! ❌ Ошибка вебхука: {e}"
+    
+    if not webhook_set:
+        try:
+            bot.set_webhook(webhook_url)
+            logger.info(f"✅ Webhook установлен: {webhook_url}")
+            webhook_set = True
+            return "Бот работает! ✅ Вебхук установлен"
+        except Exception as e:
+            return f"Бот работает! ❌ Ошибка вебхука: {e}"
+    else:
+        return "Бот работает! ✅ Вебхук уже установлен"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
