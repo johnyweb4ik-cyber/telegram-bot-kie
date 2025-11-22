@@ -150,58 +150,79 @@ async def handle_photo_no_prompt(message: Message):
     await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.\n\nПример: **/photo a robot holding a red skateboard**")
 
 
-# --- 4. Запуск Сервера (ФИНАЛЬНЫЙ РАБОЧИЙ МЕТОД) ---
+# --- 4. Запуск Сервера (Паттерн Aiogram v2/Ранний v3 с setup_webhook) ---
+
+async def on_startup(app):
+    """Вызывается при запуске aiohttp-приложения."""
+    if not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
+        logger.error("❌ Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL. Проверьте настройки Render.")
+        return
+        
+    full_webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+    
+    # 1. Установка Webhook URL
+    await bot.delete_webhook()
+    await bot.set_webhook(url=full_webhook_url)
+    logger.info(f"Webhook установлен на URL: {full_webhook_url}")
+
+async def on_shutdown(app):
+    """Вызывается при завершении aiohttp-приложения."""
+    logger.info("Удаление Webhook...")
+    await bot.delete_webhook()
+    logger.info("Webhook удален.")
+    # В v2 использовался dp.stop_polling() или dp.shutdown()
+    try:
+        await dp.shutdown() 
+    except Exception:
+        pass
+
 
 async def main():
     """Основная функция запуска бота, настроенная для Webhook на Render.com."""
     
-    if not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
-        logger.error("❌ Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL. Проверьте настройки Render.")
-        return
-    
-    logger.info("Инициализация генератора и установка Webhook...")
-    
-    full_webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
-    
-    # 1. Установка Webhook URL
-    await bot.delete_webhook() 
-    await bot.set_webhook(url=full_webhook_url)
-    logger.info(f"Webhook установлен на URL: {full_webhook_url}")
-
-    # 2. Настройка и запуск aiohttp-сервера
     app = web.Application()
     
-    # !!! КЛЮЧЕВОЙ ШАГ: РУЧНАЯ РЕГИСТРАЦИЯ ОБРАБОТЧИКА В aiohttp !!!
-    # dp.create_request_handler(bot) - это стандартный метод в Aiogram 3.x
-    webhook_request_handler = dp.create_request_handler(bot) 
-    
-    # Добавляем маршрут, чтобы POST-запросы на WEBHOOK_PATH обрабатывались Aiogram
-    app.router.add_route(
-        "POST", 
-        WEBHOOK_PATH, 
-        webhook_request_handler 
-    )
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    # Запуск сервера
-    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
+    # В Aiogram v2/раннем v3 использовался setup_webhook. 
+    # В v3.22.0 его нет, но поскольку все v3-методы не сработали, мы делаем двойную проверку.
     
     try:
-        await site.start()
-        logger.info(f"======== Running on http://{WEB_SERVER_HOST}:{WEB_SERVER_PORT} ========")
-        # Удерживаем main() в рабочем состоянии
-        await asyncio.Event().wait() 
-    finally:
-        # Очистка Webhook и ресурсов при завершении
-        await bot.delete_webhook()
-        logger.info("Webhook удален. Очистка завершена.")
-        await runner.cleanup()
+        # Пытаемся использовать setup_webhook (v2/ранний v3)
+        dp.setup_webhook(app, path=WEBHOOK_PATH)
+        logger.info("Использован dp.setup_webhook.")
+    except AttributeError:
+        try:
+            # Пытаемся использовать create_request_handler (v3.22.0 - предыдущая попытка)
+            webhook_request_handler = dp.create_request_handler(bot) 
+            app.router.add_route(
+                "POST", 
+                WEBHOOK_PATH, 
+                webhook_request_handler 
+            )
+            logger.info("Использован dp.create_request_handler.")
+        except AttributeError:
+            # Это означает, что ни один из известных методов V2 или V3 не работает. 
+            # Это критическая ошибка конфигурации.
+            logger.error("Критическая ошибка: Диспетчер не имеет ни 'setup_webhook', ни 'create_request_handler'.")
+            return
+            
+    
+    # Настройка хуков жизненного цикла aiohttp
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    
+    # Запуск сервера
+    # В Aiogram 2 использовался execute(dp, skip_updates=True, on_startup=on_startup, ...)
+    # В Aiohttp/Render используем run_app
+    web.run_app(
+        app,
+        host=WEB_SERVER_HOST,
+        port=WEB_SERVER_PORT
+    )
 
 
 if __name__ == "__main__":
     try:
+        # Запуск асинхронного main
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен вручную.")
