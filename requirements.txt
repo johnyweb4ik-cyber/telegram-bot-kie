@@ -1,4 +1,5 @@
-flask==2.3.3
-requests==2.31.0
-gunicorn==21.2.0
-google-generativeai==0.3.2
+# requirements.txt
+aiogram
+google-genai
+pillow
+aiohttp  # Нужен для работы Webhook
