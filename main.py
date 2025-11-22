@@ -2,27 +2,30 @@ import os
 import asyncio
 import logging
 from dotenv import load_dotenv
+from io import BytesIO
 
-# Импорт из aiogram
+# --- Импорты Aiogram и Google GenAI ---
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
+from aiohttp import web
 
-# Импорт для работы с Google Generative AI (Gemini/Imagen)
 from google import genai
 from google.genai import types
 from PIL import Image
-from io import BytesIO
 
 # --- 1. Настройка и Константы ---
 
-# Загрузка переменных окружения из файла .env
+# Загрузка переменных окружения из файла .env (важно для локального тестирования)
 load_dotenv()
 
 # Получение ключей из переменных окружения
+# ВНИМАНИЕ: На Render.com убедитесь, что все имена переменных — в ВЕРХНЕМ РЕГИСТРЕ.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") # URL вашего сервиса на Render.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
+WEB_SERVER_HOST = "0.0.0.0"
+WEB_SERVER_PORT = int(os.environ.get("PORT", 10000)) # Используем порт 10000, требуемый Render.com
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
@@ -30,7 +33,7 @@ logger = logging.getLogger('generator')
 
 # Константы для Imagen
 IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
-# Изображения генерируются в формате 1:1, размер 1024x1024 (по умолчанию)
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
 
 # --- 2. Класс для Генерации Изображений ---
 
@@ -39,7 +42,11 @@ class ImageGenerator:
     
     def __init__(self, api_key: str, model_name: str):
         if not api_key:
-            raise ValueError("GEMINI_API_KEY не установлен.")
+            # Не вызываем исключение, чтобы не прервать инициализацию, но логируем ошибку
+            logger.error("GEMINI_API_KEY не установлен.")
+            self.client = None
+            return
+            
         self.client = genai.Client(api_key=api_key)
         self.model = model_name
         logger.info(f"Инициализирован генератор с моделью: {self.model}")
@@ -47,10 +54,13 @@ class ImageGenerator:
     async def generate_image(self, prompt: str) -> bytes | None:
         """Генерирует изображение по текстовому описанию и возвращает байты PNG."""
         
+        if not self.client:
+            return None
+        
         # Конфигурация генерации
         config = types.GenerateImagesConfig(
-            number_of_images=1,  # Генерируем одно изображение
-            aspect_ratio="1:1"   # Квадратное изображение
+            number_of_images=1,
+            aspect_ratio="1:1"
         )
         
         logger.info(f"Запрос генерации изображения: {prompt}...")
@@ -63,18 +73,15 @@ class ImageGenerator:
                 config=config,
             )
             
-            # Проверка, что изображение сгенерировано
             if not response.generated_images:
                 logger.error("API вернул пустой список generated_images.")
                 return None
                 
-            # Получение данных изображения в base64 и декодирование
             generated_image = response.generated_images[0]
             image_bytes = generated_image.image.image_bytes
             
             # Конвертация в PNG формат для Telegram
             img = Image.open(BytesIO(image_bytes))
-            
             png_bytes = BytesIO()
             img.save(png_bytes, format='PNG')
             png_bytes.seek(0)
@@ -82,26 +89,22 @@ class ImageGenerator:
             return png_bytes.read()
 
         except Exception as e:
-            # Логирование полной ошибки
             error_message = f"Ошибка API при генерации изображения: {e}"
             if hasattr(e, 'response') and e.response:
-                 error_message += f". {e.response.status_code} {e.response.text}"
+                 error_message += f". Status: {e.response.status_code}, Text: {e.response.text}"
             logger.error(error_message)
             return None
 
 
 # --- 3. Инициализация и Хэндлеры ---
 
-# Инициализация бота
+# Инициализация бота и диспетчера
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
 # Инициализация генератора
-try:
-    image_generator = ImageGenerator(api_key=GEMINI_API_KEY, model_name=IMAGE_MODEL_NAME)
-except ValueError as e:
-    logger.error(f"Ошибка инициализации: {e}")
-    image_generator = None # Отключаем функционал, если ключа нет
+image_generator = ImageGenerator(api_key=GEMINI_API_KEY, model_name=IMAGE_MODEL_NAME)
+
 
 @dp.message(Command("start"))
 async def handle_start(message: Message):
@@ -110,16 +113,16 @@ async def handle_start(message: Message):
         "🤖 Привет! Я бот-генератор изображений.\n"
         "Чтобы сгенерировать изображение, используй команду:\n\n"
         "**/photo [ваше описание на английском]**\n\n"
-        "Например: **/photo cat in space**"
+        "Например: **/photo a majestic wolf in the snow, hyperrealistic**"
     )
-    await message.answer(welcome_text)
+    await message.answer(welcome_text, parse_mode='Markdown')
 
 @dp.message(Command("photo"), F.text.regexp(r'/photo\s+(\S.*)'))
 async def handle_photo(message: Message):
     """Обработка команды /photo с промптом."""
     
-    if not image_generator:
-        await message.answer("❌ Бот не может генерировать изображения. Проверьте API-ключ на сервере.")
+    if not image_generator.client:
+        await message.answer("❌ Бот не может генерировать изображения. Проверьте API-ключ Google.")
         return
 
     # Получение промпта (текста после /photo)
@@ -135,7 +138,7 @@ async def handle_photo(message: Message):
     # Вызов генератора
     image_bytes = await image_generator.generate_image(prompt)
     
-    # Удаление сообщения о статусе (опционально, для чистоты чата)
+    # Удаление сообщения о статусе
     await bot.delete_message(message.chat.id, status_message.message_id)
 
     if image_bytes:
@@ -149,59 +152,55 @@ async def handle_photo(message: Message):
     else:
         # Ответ в случае ошибки
         await message.answer(
-            "❌ Не удалось сгенерировать изображение. Пожалуйста, попробуйте другое описание или обратитесь к администратору (проверьте логи)."
+            "❌ Не удалось сгенерировать изображение. Пожалуйста, попробуйте другое описание или проверьте логи сервера."
         )
 
 @dp.message(Command("photo"))
 async def handle_photo_no_prompt(message: Message):
     """Обработка команды /photo без промпта."""
-    await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.\n\nПример: **/photo a dog wearing glasses**")
+    await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.\n\nПример: **/photo a robot holding a red skateboard**")
 
 
-# --- 4. Запуск Сервера ---
+# --- 4. Запуск Сервера (Функция main) ---
 
 async def main():
-    """Основная функция запуска бота."""
+    """Основная функция запуска бота, настроенная для Webhook на Render.com."""
     
     # 1. Проверка ключей
-    if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY or not WEBHOOK_URL:
-        logger.error("Одна или несколько необходимых переменных окружения (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, WEBHOOK_URL) не установлены.")
+    if not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
+        logger.error("❌ Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL. Проверьте настройки Render.")
         return
-
+    
     logger.info("Инициализация генератора и установка Webhook...")
-
-    # 2. Установка Webhook
-    await bot.set_webhook(url=f"{WEBHOOK_URL}/webhook/{TELEGRAM_BOT_TOKEN}")
-    logger.info(f"Webhook установлен на URL: {WEBHOOK_URL}/webhook/{TELEGRAM_BOT_TOKEN}")
-
-    # 3. Запуск диспетчера
-    # dp.run_polling(bot) не подходит для Render.com
-    # Мы используем встроенный aiohttp-сервер для обработки POST-запросов от Telegram
-    from aiohttp import web
     
-    # URL-путь для приема обновлений
-    webhook_path = f"/webhook/{TELEGRAM_BOT_TOKEN}"
-    
-    # Создание HTTP-приложения
+    # 2. Установка Webhook URL
+    full_webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+    await bot.set_webhook(url=full_webhook_url)
+    logger.info(f"Webhook установлен на URL: {full_webhook_url}")
+
+    # 3. Настройка и запуск aiohttp-сервера
     app = web.Application()
     
-    # Добавление хэндлера для Telegram обновлений
-    app.router.add_post(webhook_path, dp.create_request_handler(bot))
+    # Добавляем маршрут, который будет обрабатываться диспетчером Aiogram (v3)
+    app.router.add_route(
+        "POST", WEBHOOK_PATH, dp.get_web_app_factory()
+    )
     
-    # Запуск сервера на порту 10000 (стандарт для Render.com)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 10000)
+    
+    # Запуск сервера
+    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
     
     try:
         await site.start()
-        logger.info("======== Running on http://0.0.0.0:10000 ========")
+        logger.info(f"======== Running on http://{WEB_SERVER_HOST}:{WEB_SERVER_PORT} ========")
         # Удерживаем main() в рабочем состоянии
         await asyncio.Event().wait() 
     finally:
-        # Очистка Webhook при завершении
+        # Очистка Webhook и ресурсов при завершении
         await bot.delete_webhook()
-        logger.info("Webhook удален.")
+        logger.info("Webhook удален. Очистка завершена.")
         await runner.cleanup()
 
 
