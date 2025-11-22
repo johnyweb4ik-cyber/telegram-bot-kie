@@ -2,7 +2,6 @@ import os
 import logging
 from flask import Flask, request
 from telegram import Bot, Update
-from telegram.ext import Application, MessageHandler, filters
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -17,9 +16,18 @@ KIE_API_KEY = os.environ.get('KIE_API_KEY')
 # Создаем бота
 bot = Bot(token=BOT_TOKEN)
 
+# Устанавливаем вебхук при запуске
+RENDER_URL = "https://telegram-bot-kie.onrender.com"  # ЗАМЕНИ на свой URL из Render
+try:
+    webhook_url = f"{RENDER_URL}/webhook"
+    bot.set_webhook(webhook_url)
+    print(f"✅ Webhook установлен: {webhook_url}")
+except Exception as e:
+    print(f"❌ Ошибка вебхука: {e}")
+
 @app.route('/')
 def home():
-    return "Бот работает! ✅"
+    return "Бот работает! ✅ Webhook: " + str(bot.get_webhook_info())
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -34,7 +42,7 @@ def webhook():
             if text == '/start':
                 bot.send_message(chat_id, "Привет! Я бот для генерации изображений. Отправь мне описание картинки.")
             else:
-                bot.send_message(chat_id, f"Получил твое сообщение: '{text}'. Пока что это тестовый режим.")
+                bot.send_message(chat_id, f"Получил: '{text}'. Режим тестирования - скоро будет генерация!")
     
     return 'ok'
 
