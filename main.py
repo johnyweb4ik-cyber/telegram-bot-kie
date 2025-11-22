@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BufferedInputFile
-from aiogram.filters import Command # <-- ВАЖНО: Правильный импорт фильтра Command для Aiogram v3+
+from aiogram.filters import Command
 from google import genai
 from google.genai.errors import APIError
 from aiohttp import web 
@@ -24,8 +24,10 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# ВАЖНОЕ ИСПРАВЛЕНИЕ: Используем отдельный, безопасный секретный токен.
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
-WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
+WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN") 
+WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET_TOKEN}" # Используем секретный токен в пути
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 # Модели
@@ -63,7 +65,7 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN,
 
 # --- Хэндлеры ---
 
-@dp.message(Command("start")) # <-- ИСПРАВЛЕНИЕ: Используем импортированный Command
+@dp.message(Command("start")) 
 async def handle_start(message: types.Message):
     """Обрабатывает команду /start, отправляя приветственное сообщение."""
     greeting_text = (
@@ -75,7 +77,7 @@ async def handle_start(message: types.Message):
     )
     await message.answer(greeting_text)
 
-@dp.message(Command("photo")) # <-- ИСПРАВЛЕНИЕ: Используем импортированный Command
+@dp.message(Command("photo")) 
 async def handle_photo(message: types.Message):
     """
     Основной хэндлер. 
@@ -87,11 +89,10 @@ async def handle_photo(message: types.Message):
         await message.answer("❌ **Ошибка:** Сервис генерации изображений не инициализирован (проверьте GEMINI_API_KEY).")
         return
         
-    # Извлекаем промпт, чтобы не зависеть от синтаксиса Command
+    # Извлекаем промпт
     if message.text.lower().startswith('/photo'):
         original_prompt = message.text[len('/photo'):].strip()
     else:
-        # Это запасной вариант, если Command пропустит что-то неожиданное
         original_prompt = message.text.strip()
 
 
@@ -106,7 +107,7 @@ async def handle_photo(message: types.Message):
     status_message = await message.answer(f"🤖 **Начинаю работу.**\n\n"
                                          f"1. Улучшаю и перевожу ваш промпт...")
 
-    enhanced_prompt = original_prompt # Инициализируем на случай ошибки
+    enhanced_prompt = original_prompt 
 
     try:
         # --- Шаг 1: Улучшение и перевод промпта (Текстовая модель) ---
@@ -195,29 +196,36 @@ async def handle_text(message: types.Message):
 
 async def set_telegram_webhook():
     """Устанавливает вебхук на URL хостинга (Render)."""
-    # Если переменная RENDER_EXTERNAL_URL не установлена, запускаем в режиме long-polling
+    
     if not WEBHOOK_HOST:
         logger.error("Переменная RENDER_EXTERNAL_URL не найдена. Запуск в режиме long-polling.")
         await dp.start_polling(bot)
         return
         
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN не установлен, невозможно установить вебхук.")
+    if not TELEGRAM_BOT_TOKEN or not WEBHOOK_SECRET_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN или WEBHOOK_SECRET_TOKEN не установлен, невозможно установить вебхук.")
         return
 
     logger.info(f"Установка вебхука на: {WEBHOOK_URL}")
+    
+    # ИСПРАВЛЕНО: Теперь используем WEBHOOK_SECRET_TOKEN
     await bot.set_webhook(
         url=WEBHOOK_URL,
-        secret_token=TELEGRAM_BOT_TOKEN 
+        secret_token=WEBHOOK_SECRET_TOKEN 
     )
     logger.info(f"✅ Вебхук установлен: {WEBHOOK_URL}")
 
 async def main():
     """Основная точка входа в приложение."""
     
-    # 1. Настройка вебхука (или запуск long-polling)
-    await set_telegram_webhook()
-    
+    try:
+        # 1. Настройка вебхука (или запуск long-polling)
+        await set_telegram_webhook()
+    except Exception as e:
+        logger.error(f"Критическая ошибка установки вебхука: Telegram server says - {e}")
+        # Если вебхук установить не удалось, приложение должно упасть, чтобы Render перезапустил его
+        return 
+
     # Если мы в режиме long-polling, то дальнейший код aiohttp не нужен
     if not WEBHOOK_HOST:
         return
@@ -227,7 +235,7 @@ async def main():
     async def webhook_handler(request: web.Request):
         """Обрабатывает входящие POST-запросы от Telegram."""
         # Проверка секретного токена
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != TELEGRAM_BOT_TOKEN:
+        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET_TOKEN:
              return web.Response(status=403, text="Invalid secret token")
         
         # Передача обновления диспетчеру aiogram
@@ -260,7 +268,5 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен вручную.")
     except Exception as e:
-        logger.error(f"Критическая ошибка запуска: {e}")
+        logger.error(f"Критическая ошибка запуска приложения: {e}")
