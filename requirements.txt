@@ -1,5 +1,6 @@
 # requirements.txt
 aiogram
+aiohttp
 google-genai
 pillow
 aiohttp  # Нужен для работы Webhook
