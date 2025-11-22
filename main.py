@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+import base64
 from flask import Flask, request
 
 logging.basicConfig(level=logging.INFO)
@@ -10,9 +11,6 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 KIE_API_KEY = os.environ.get('KIE_API_KEY')
-
-logger.info(f"BOT_TOKEN exists: {BOT_TOKEN is not None}")
-logger.info(f"KIE_API_KEY exists: {KIE_API_KEY is not None}")
 
 def setup_webhook():
     try:
@@ -36,49 +34,45 @@ setup_webhook()
 
 def generate_image(prompt):
     try:
-        # Пробуем разные endpoints KIE API
-        endpoints = [
-            "https://api.kie.ai/v1/images/generations",  # Возможный правильный endpoint
-            "https://api.kie.ai/v1/generate/image",      # Альтернативный вариант
-            "https://api.kie.ai/v1/image/generate"       # Еще один вариант
-        ]
+        # Правильный endpoint для KIE API
+        url = "https://api.kie.ai/v1/chat/completions"
         
         headers = {
             "Authorization": f"Bearer {KIE_API_KEY}",
             "Content-Type": "application/json"
         }
         
+        # Данные для генерации изображения через chat/completions
         data = {
-            "model": "nano-banana",
-            "prompt": prompt,
-            "width": 1024,
-            "height": 1024
+            "model": "nano-banana",  # Или "flux-pro/v1.1" для другого моделя
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"Сгенерируй изображение: {prompt}"
+                }
+            ],
+            "max_tokens": 1000
         }
         
-        for endpoint in endpoints:
-            logger.info(f"🔄 Пробуем endpoint: {endpoint}")
-            
-            response = requests.post(endpoint, json=data, headers=headers, timeout=60)
-            logger.info(f"📡 Ответ {endpoint}: {response.status_code}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"📦 Успешный ответ: {result}")
-                
-                # Пробуем разные форматы ответа
-                if result.get("images"):
-                    return result["images"][0]
-                elif result.get("data") and result["data"].get("url"):
-                    return result["data"]["url"]
-                elif result.get("url"):
-                    return result["url"]
-                else:
-                    logger.info(f"📋 Структура ответа: {result}")
-                    
-            elif response.status_code != 404:
-                logger.info(f"📋 Ответ при ошибке: {response.text}")
+        logger.info(f"🔄 Отправка в KIE API chat/completions...")
+        response = requests.post(url, json=data, headers=headers, timeout=60)
+        logger.info(f"📡 Ответ KIE: {response.status_code}")
         
-        return None
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"📦 Структура ответа: {result}")
+            
+            # Пробуем разные варианты извлечения изображения
+            if result.get("choices"):
+                content = result["choices"][0].get("message", {}).get("content", "")
+                if content and content.startswith("http"):
+                    return content
+                    
+            # Если нет URL в content, возвращаем информацию для отладки
+            return f"Ответ получен: {result}"
+        else:
+            logger.error(f"❌ Ошибка KIE API: {response.status_code} - {response.text}")
+            return None
             
     except Exception as e:
         logger.error(f"❌ Ошибка KIE: {e}")
@@ -104,40 +98,18 @@ def process_message(chat_id, text):
         logger.info(f"🎨 Генерация: {text}")
         send_message(chat_id, f"🔄 Генерирую: '{text}'...")
         
-        image_url = generate_image(text)
+        result = generate_image(text)
         
-        if image_url:
-            logger.info(f"✅ Успех! Отправляем фото...")
-            send_telegram_photo(chat_id, image_url, text)
+        if result:
+            logger.info(f"✅ Успех! Результат: {result}")
+            send_message(chat_id, f"🎨 Результат: {result}")
         else:
             logger.error("❌ Генерация не удалась")
-            send_message(chat_id, "❌ Ошибка: проверь API ключ KIE или попробуй позже")
+            send_message(chat_id, "❌ Ошибка генерации")
             
     except Exception as e:
         logger.error(f"💥 Ошибка: {e}")
         send_message(chat_id, "❌ Произошла ошибка")
-
-def send_telegram_photo(chat_id, image_url, prompt):
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-            json={
-                "chat_id": chat_id,
-                "photo": image_url,
-                "caption": f"🎨 Сгенерировано: '{prompt}'"
-            },
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"✅ Фото отправлено")
-        else:
-            logger.error(f"❌ Ошибка фото: {response.text}")
-            send_message(chat_id, f"✅ Сгенерировано! URL: {image_url}")
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки фото: {e}")
-        send_message(chat_id, f"✅ Сгенерировано! URL: {image_url}")
 
 def send_message(chat_id, text):
     try:
