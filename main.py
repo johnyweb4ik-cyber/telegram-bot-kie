@@ -4,13 +4,13 @@ import asyncio
 import base64
 import json
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types # types здесь это aiogram.types
+from aiogram import Bot, Dispatcher 
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BufferedInputFile
+from aiogram.types import Message, BufferedInputFile, Update # Явный импорт нужных типов Telegram
 from aiogram.filters import Command
 from google import genai
-from google.genai import types as genai_types # Переименован импорт, чтобы избежать конфликта
+from google.genai import types as genai_types # Переименован импорт типов Gemini
 from google.genai.errors import APIError
 from aiohttp import web 
 
@@ -76,7 +76,7 @@ bot = Bot(token=bot_token_to_use,
 # --- Хэндлеры ---
 
 @dp.message(Command("start")) 
-async def handle_start(message: types.Message):
+async def handle_start(message: Message): # Используем Message
     """Обрабатывает команду /start, отправляя приветственное сообщение."""
     if bot.token == "PLACEHOLDER_TOKEN_IF_MISSING":
          await message.answer("❌ Бот не запущен! Проверьте, что переменная TELEGRAM_BOT_TOKEN установлена в настройках Render.")
@@ -92,7 +92,7 @@ async def handle_start(message: types.Message):
     await message.answer(greeting_text)
 
 @dp.message(Command("photo")) 
-async def handle_photo(message: types.Message):
+async def handle_photo(message: Message): # Используем Message
     """
     Основной хэндлер. 
     1. Улучшает и переводит промпт (с русского на английский). 
@@ -202,7 +202,7 @@ async def handle_photo(message: types.Message):
              pass 
 
 @dp.message()
-async def handle_text(message: types.Message):
+async def handle_text(message: Message): # Используем Message
     """Отправляет подсказку, если пользователь ввел обычный текст без команды."""
     await message.answer(
         "Пожалуйста, используйте команду `/photo` для генерации изображения.\n"
@@ -261,7 +261,7 @@ async def main():
                 return web.Response(text="OK")
             
             # Валидация обновления и передача диспетчеру aiogram
-            update = types.Update.model_validate(json_data, context={"bot": bot})
+            update = Update.model_validate(json_data, context={"bot": bot}) # Используем Update
             await dp.feed_update(bot, update)
             
             logger.info("Обновление обработано успешно.")
