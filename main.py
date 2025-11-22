@@ -3,7 +3,6 @@ import logging
 import os
 import io
 import base64
-from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import BufferedInputFile
@@ -19,13 +18,15 @@ from google.genai.errors import APIError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Загрузка переменных окружения и константы ---
-load_dotenv()
+# --- Получение переменных окружения (должны быть установлены в настройках хостинга) ---
+# Мы не используем load_dotenv(), полагаясь на переменные, инжектированные платформой.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") # Например: https://your-render-service.onrender.com
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", f"/webhook/{os.getenv('TG_WEBHOOK_SECRET')}")
+# Используем TG_WEBHOOK_SECRET для формирования безопасного пути
+WEBHOOK_SECRET = os.getenv("TG_WEBHOOK_SECRET", "default-secret-path") # Используем дефолтный путь, если секрет не установлен
+WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 WEB_SERVER_HOST = '0.0.0.0'
 WEB_SERVER_PORT = int(os.getenv("PORT", 8080))
@@ -35,7 +36,13 @@ TEXT_MODEL = "gemini-2.5-flash-preview-09-2025"          # Для улучшен
 VEO_MODEL = "veo-3.1-generate-preview"                  # Для генерации видео
 
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY or not WEBHOOK_HOST:
-    logger.error("❌ Отсутствуют необходимые переменные окружения (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY, WEBHOOK_HOST).")
+    # Проверка переменных окружения
+    error_vars = []
+    if not TELEGRAM_BOT_TOKEN: error_vars.append("TELEGRAM_BOT_TOKEN")
+    if not GEMINI_API_KEY: error_vars.append("GEMINI_API_KEY")
+    if not WEBHOOK_HOST: error_vars.append("WEBHOOK_HOST")
+    
+    logger.error(f"❌ Критическая ошибка: Отсутствуют необходимые переменные окружения: {', '.join(error_vars)}. Убедитесь, что они установлены в настройках хостинга.")
     exit()
 
 # --- Инициализация клиентов ---
@@ -53,7 +60,6 @@ except Exception as e:
 
 async def enhance_prompt(prompt: str) -> str:
     """Улучшает короткий пользовательский промпт, добавляя детали для лучшей генерации видео."""
-    # Используется только для текстового промпта, чтобы сделать его более детализированным
     system_instruction = (
         "Ты — креативный директор по цифровому искусству. Твоя задача — "
         "превратить короткий, простой запрос пользователя (промпт) в детальное, "
@@ -82,6 +88,11 @@ async def veo_video_worker(chat_id: int, enhanced_prompt: str, status_message: t
     Универсальная фоновая задача для обработки LRO генерации видео Veo.
     Принимает опциональные Base64-данные изображения (если это режим 'Изображение в Видео').
     """
+    is_image_mode = image_input_data is not None
+    # 3 шага для "Изображение в Видео" (Загрузка/Промпт/Veo)
+    # 2 шага для "Текст в Видео" (Промпт/Veo)
+    total_steps = 3 if is_image_mode else 2
+    
     try:
         # 1. Запуск генерации видео
         
@@ -92,15 +103,24 @@ async def veo_video_worker(chat_id: int, enhanced_prompt: str, status_message: t
         }
         
         # Если предоставлено входное изображение, добавляем его в аргументы
-        if image_input_data is not None:
+        if is_image_mode:
             generate_args["image"] = image_input_data
+            step_number = 2
+        else:
+            step_number = 1
+            
+        await bot.edit_message_text(
+            chat_id=chat_id, 
+            message_id=status_message.message_id, 
+            text=f"🤖 {step_number}/{total_steps}: Запускаю генерацию видео с {VEO_MODEL}. Ожидайте уведомления (может занять 1-5 минут)..."
+        )
         
         operation = gemini_client.models.generate_videos(**generate_args)
         operation_name = operation.name
         
         logger.info(f"Операция Veo LRO запущена: {operation_name}")
 
-        # 2. Опрос LRO до завершения (шаг 2/2 или 3/3)
+        # 2. Опрос LRO до завершения
         while not operation.done:
             await asyncio.sleep(10) # Опрос каждые 10 секунд
             operation = gemini_client.operations.get(operation_name)
@@ -186,14 +206,8 @@ async def handle_veo_prompt(message: types.Message):
         # 1. Улучшение промпта (Шаг 0/2)
         enhanced_prompt = await enhance_prompt(user_prompt)
         
-        # 2. Запуск Veo (Шаг 1/2)
-        await bot.edit_message_text(
-            chat_id=chat_id, 
-            message_id=status_message.message_id, 
-            text=f"🤖 1/2: Запускаю генерацию видео с {VEO_MODEL}. Ожидайте уведомления (может занять 1-5 минут)..."
-        )
-        
-        # 3. Запуск общего рабочего процесса Veo (без входного изображения)
+        # 2. Запуск общего рабочего процесса Veo (без входного изображения)
+        # Воркер сам обновит статус на 1/2, когда будет готов к LRO
         await veo_video_worker(chat_id, enhanced_prompt, status_message, image_input_data=None)
 
     except Exception as e:
@@ -257,14 +271,7 @@ async def handle_user_photo(message: types.Message, bot: Bot):
         )
         enhanced_prompt = await enhance_prompt(user_prompt)
         
-        # 3. Запуск Veo (Шаг 2/3)
-        await bot.edit_message_text(
-            chat_id=chat_id, 
-            message_id=status_message.message_id, 
-            text=f"🤖 2/3: Запускаю генерацию видео с {VEO_MODEL}. Ожидайте уведомления (может занять 1-5 минут)..."
-        )
-        
-        # 4. Запуск общего рабочего процесса Veo с пользовательским изображением
+        # 3. Запуск общего рабочего процесса Veo с пользовательским изображением
         await veo_video_worker(chat_id, enhanced_prompt, status_message, image_input_data=image_input_data)
 
     except Exception as e:
@@ -283,33 +290,43 @@ async def on_startup(app):
     try:
         await bot.delete_webhook()
         logger.info(f"Установка вебхука на: {WEBHOOK_URL}")
-        await bot.set_webhook(url=WEBHOOK_URL)
-        logger.info(f"✅ Вебхук установлен: {WEBHOOK_URL}")
+        # Проверка, что WEBHOOK_HOST не пуст, прежде чем устанавливать вебхук
+        if WEBHOOK_HOST:
+            await bot.set_webhook(url=WEBHOOK_URL)
+            logger.info(f"✅ Вебхук установлен: {WEBHOOK_URL}")
+        else:
+            logger.error("❌ WEBHOOK_HOST не установлен, вебхук не может быть настроен.")
+            # Не вызываем exit(), чтобы позволить веб-серверу запуститься, но ловим ошибку
+            
     except Exception as e:
         logger.error(f"❌ Ошибка при установке вебхука: {e}")
 
 async def on_shutdown(app):
     """Удаляет вебхук при остановке приложения."""
     logger.info("Удаление вебхука...")
-    await bot.delete_webhook()
-    logger.info("✅ Вебхук удален.")
+    try:
+        await bot.delete_webhook()
+        logger.info("✅ Вебхук удален.")
+    except Exception as e:
+        logger.warning(f"Ошибка при удалении вебхука (возможно, он не был установлен): {e}")
 
 async def handle_webhook(request):
     """Обрабатывает входящие обновления от Telegram."""
-    logger.info(f"Получен POST-запрос на {request.path}.")
-    if request.match_info.get('path') == WEBHOOK_PATH:
-        try:
-            update_data = await request.json()
-            telegram_update = types.Update(**update_data)
-            
-            await dp.feed_update(bot, telegram_update)
-            logger.info("Обновление обработано успешно.")
-            return web.Response()
-        except Exception as e:
-            logger.error(f"Ошибка обработки обновления: {e}", exc_info=True)
-            return web.Response(status=200) # Возвращаем 200, чтобы не было повторных попыток
-    
-    return web.Response(text="OK", status=200)
+    if request.path != WEBHOOK_PATH:
+        # Проверка пути для дополнительной безопасности
+        return web.Response(text="Not Found", status=404)
+        
+    try:
+        update_data = await request.json()
+        telegram_update = types.Update(**update_data)
+        
+        await dp.feed_update(bot, telegram_update)
+        logger.info("Обновление обработано успешно.")
+        return web.Response()
+    except Exception as e:
+        logger.error(f"Ошибка обработки обновления: {e}", exc_info=True)
+        # Всегда возвращаем 200, чтобы Telegram не пытался отправить обновление снова
+        return web.Response(status=200) 
 
 async def main():
     """Главная функция для запуска веб-сервера."""
@@ -320,23 +337,22 @@ async def main():
     
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
     
-    logger.info(f"Запуск веб-сервера на порту: {WEB_SERVER_PORT}")
+    logger.info(f"Запуск веб-сервера на хосте: {WEB_SERVER_HOST}, порту: {WEB_SERVER_PORT}")
     runner = web.AppRunner(app)
     await runner.setup()
+    
+    # Для Render/Heroku нужно bind'ить к 0.0.0.0 и использовать PORT
     site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
     await site.start()
     
     logger.info("✅ Приложение успешно запущено и ожидает запросов от Telegram.")
     
+    # Запускаем бесконечный цикл, чтобы AIOHTTP продолжал работать
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     try:
-        # Убедитесь, что Telegram бот не запускается в режиме Long Polling
-        if WEBHOOK_HOST: 
-            asyncio.run(main())
-        else:
-            logger.error("Для запуска в режиме вебхука необходимо установить WEBHOOK_HOST.")
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Приложение остановлено вручную.")
