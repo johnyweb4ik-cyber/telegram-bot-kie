@@ -1,5 +1,6 @@
 import os
 import logging
+import requests
 from flask import Flask, request
 from telegram import Bot, Update
 
@@ -13,19 +14,34 @@ KIE_API_KEY = os.environ.get('KIE_API_KEY')
 
 bot = Bot(token=BOT_TOKEN)
 
-# Устанавливаем меню команд
-try:
-    bot.set_my_commands([
-        ("start", "Запустить бота"),
-        ("help", "Помощь"),
-        ("generate", "Сгенерировать изображение"),
-        ("balance", "Проверить баланс")
-    ])
-    logger.info("✅ Меню команд установлено")
-except Exception as e:
-    logger.error(f"❌ Ошибка меню: {e}")
+# Функция для генерации изображения через KIE API
+def generate_image(prompt):
+    try:
+        url = "https://api.kie.ai/v1/image/generation"
+        headers = {
+            "Authorization": f"Bearer {KIE_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "nano-banana",
+            "prompt": prompt,
+            "width": 1024,
+            "height": 1024
+        }
+        
+        response = requests.post(url, json=data, headers=headers)
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("images", [])[0] if result.get("images") else None
+        else:
+            logger.error(f"KIE API error: {response.status_code} - {response.text}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Generation error: {e}")
+        return None
 
-# Флаг для отслеживания установки вебхука
 webhook_set = False
 
 @app.route('/')
@@ -37,13 +53,13 @@ def home():
     if not webhook_set:
         try:
             bot.set_webhook(webhook_url)
-            logger.info(f"✅ Webhook установлен: {webhook_url}")
+            logger.info(f"✅ Webhook установлен")
             webhook_set = True
-            return "Бот работает! ✅ Вебхук установлен, меню настроено"
+            return "Бот работает! ✅ Генерация готова"
         except Exception as e:
-            return f"Бот работает! ❌ Ошибка вебхука: {e}"
+            return f"Бот работает! ❌ Ошибка: {e}"
     else:
-        return "Бот работает! ✅ Вебхук уже установлен, меню настроено"
+        return "Бот работает! ✅"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -57,28 +73,40 @@ def webhook():
             if text == '/start':
                 bot.send_message(
                     chat_id, 
-                    "🎨 Привет! Я бот для генерации изображений через AI.\n\n"
-                    "Доступные команды:\n"
-                    "/generate - Сгенерировать изображение\n"
-                    "/balance - Проверить баланс\n"
+                    "🎨 Привет! Я бот для генерации изображений через AI\n\n"
+                    "Команды:\n"
+                    "/generate - Создать изображение\n"
+                    "/balance - Баланс\n"
                     "/help - Помощь"
                 )
             elif text == '/help':
-                bot.send_message(
-                    chat_id,
-                    "🤖 Помощь по боту:\n\n"
-                    "1. Используй /generate для создания изображений\n"
-                    "2. Баланс можно пополнить через админа\n"
-                    "3. Просто отправь описание картинки после команды /generate"
-                )
+                bot.send_message(chat_id, "📖 Используй /generate и опиши картинку которую хочешь создать")
             elif text == '/balance':
-                bot.send_message(chat_id, "💰 Твой баланс: 0 кредитов\n\nДля пополнения обратись к админу.")
+                bot.send_message(chat_id, "💰 Баланс: 10 тестовых кредитов\nПополнение через админа")
             elif text == '/generate':
-                bot.send_message(chat_id, "📝 Отправь описание картинки которую хочешь сгенерировать.\n\nНапример: 'Кот в космосе' или 'Город будущего'")
+                bot.send_message(chat_id, "📝 Напиши описание картинки...\n\nНапример: 'Кот в скафандре в космосе'")
+            elif text.startswith('/generate '):
+                # Пользователь отправил /generate с текстом
+                prompt = text.replace('/generate ', '')
+                generate_and_send_image(chat_id, prompt)
             else:
-                bot.send_message(chat_id, f"🔮 Скоро я научусь генерировать картинки по запросу: '{text}'\n\nПока используй команды из меню!")
+                # Любой другой текст считаем промптом для генерации
+                generate_and_send_image(chat_id, text)
+
+def generate_and_send_image(chat_id, prompt):
+    """Генерирует и отправляет изображение"""
+    if not prompt.strip():
+        bot.send_message(chat_id, "❌ Напиши описание картинки")
+        return
+        
+    bot.send_message(chat_id, f"🔄 Генерирую: '{prompt}'...")
     
-    return 'ok'
+    image_url = generate_image(prompt)
+    
+    if image_url:
+        bot.send_photo(chat_id, image_url, caption=f"🎨 Сгенерировано: '{prompt}'")
+    else:
+        bot.send_message(chat_id, "❌ Ошибка генерации. Попробуй другой запрос.")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
