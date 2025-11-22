@@ -75,21 +75,26 @@ def generate_image(prompt):
         return None
 
 def wait_for_image_result(task_id):
-    """Ожидаем завершения генерации с детальным логированием"""
+    """Ожидаем завершения генерации через ПРАВИЛЬНЫЙ endpoint"""
     try:
-        url = f"https://api.kie.ai/api/v1/task/{task_id}"
+        url = "https://api.kie.ai/api/v1/flux/kontext/record-info"
         headers = {
             "Authorization": f"Bearer {KIE_API_KEY}"
         }
         
+        params = {
+            "taskId": task_id
+        }
+        
         logger.info(f"🔍 Начинаем отслеживание задачи: {task_id}")
+        logger.info(f"🔍 Используем правильный endpoint: {url}")
         
         # Ждем до 5 минут с проверками каждые 10 секунд
         for i in range(30):  # 30 * 10 сек = 5 минут
             logger.info(f"⏳ Проверка {i+1}/30 задачи: {task_id}")
             
             try:
-                response = requests.get(url, headers=headers, timeout=30)
+                response = requests.get(url, headers=headers, params=params, timeout=30)
                 logger.info(f"📡 HTTP статус проверки: {response.status_code}")
                 
                 if response.status_code == 200:
@@ -106,28 +111,19 @@ def wait_for_image_result(task_id):
                         # Логируем все поля данных
                         logger.info(f"📋 Все поля данных: {list(data.keys())}")
                         
-                        # Проверяем статус в разных возможных полях
-                        status = data.get("status")
-                        state = data.get("state")
-                        task_status = data.get("taskStatus")
+                        # Проверяем статус через successFlag
+                        success_flag = data.get("successFlag")
+                        logger.info(f"📋 successFlag: {success_flag}")
                         
-                        logger.info(f"📋 Статус (status): {status}")
-                        logger.info(f"📋 Состояние (state): {state}") 
-                        logger.info(f"📋 Статус задачи (taskStatus): {task_status}")
+                        # successFlag значения:
+                        # 0 = pending, 1 = completed, 2 = failed, 3 = processing
                         
-                        # Определяем актуальный статус
-                        actual_status = status or state or task_status
-                        logger.info(f"📋 Актуальный статус: {actual_status}")
-                        
-                        if actual_status in ["completed", "success", "finished"]:
-                            # Ищем URL изображения во всех возможных полях
-                            image_url = (data.get("imageUrl") or 
-                                       data.get("url") or 
-                                       data.get("image_url") or
-                                       data.get("outputUrl") or
-                                       data.get("resultUrl"))
+                        if success_flag == 1:  # completed
+                            response_data = data.get("response", {})
+                            image_url = response_data.get("resultImageUrl") or response_data.get("originImageUrl")
                             
                             logger.info(f"🔍 Найденные URL: {image_url}")
+                            logger.info(f"📋 Все данные response: {response_data}")
                             
                             if image_url:
                                 logger.info(f"🎉 Изображение готово: {image_url}")
@@ -136,32 +132,32 @@ def wait_for_image_result(task_id):
                                 logger.info(f"📋 Все данные completed задачи: {data}")
                                 return f"Задача завершена, но URL не найден. Данные: {data}"
                         
-                        elif actual_status in ["failed", "error"]:
-                            error_msg = data.get("error", data.get("message", "Неизвестная ошибка"))
-                            logger.error(f"❌ Задача провалилась: {error_msg}")
+                        elif success_flag == 2:  # failed
+                            error_code = data.get("errorCode")
+                            error_message = data.get("errorMessage", "Неизвестная ошибка")
+                            logger.error(f"❌ Задача провалилась: {error_code} - {error_message}")
                             return None
                         
-                        elif actual_status in ["processing", "running", "in_progress"]:
-                            logger.info("🔄 Задача в процессе...")
+                        elif success_flag == 3:  # processing
+                            logger.info("🔄 Задача в процессе обработки...")
                             # Продолжаем ждать
                             
-                        elif actual_status in ["pending", "queued", "waiting"]:
+                        elif success_flag == 0:  # pending
                             logger.info("⏸️ Задача в очереди...")
                             # Продолжаем ждать
                             
                         else:
-                            logger.info(f"📋 Неизвестный статус: {actual_status}")
+                            logger.info(f"📋 Неизвестный successFlag: {success_flag}")
                             logger.info(f"📋 Полные данные: {data}")
                     
                     else:
                         logger.error(f"❌ Ошибка в ответе задачи: {result}")
-                        # Если код не 200, возможно задача не найдена или ошибка
                         if result.get("code") == 404:
                             logger.error("❌ Задача не найдена")
                             return None
                 
                 elif response.status_code == 404:
-                    logger.error(f"❌ Задача {task_id} не найдена (404)")
+                    logger.error(f"❌ Endpoint не найден (404)")
                     return None
                     
                 else:
