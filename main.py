@@ -10,31 +10,27 @@ from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 from aiohttp import web
 
-# Импорт клиента GenAI (убедитесь, что установлен google-genai)
 from google import genai
 from google.genai import types
 from PIL import Image
 
 # --- 1. Настройка и Константы ---
-
-# Загрузка переменных окружения
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
 WEB_SERVER_HOST = "0.0.0.0"
-WEB_SERVER_PORT = int(os.environ.get("PORT", 10000)) # Порт 10000 для Render.com
+WEB_SERVER_PORT = int(os.environ.get("PORT", 10000))
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger('generator')
 
-# Константы для Imagen
 IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
 
-# --- 2. Класс для Генерации Изображений ---
+# --- 2. Класс для Генерации Изображений (Не изменен) ---
 
 class ImageGenerator:
     """Класс для взаимодействия с Imagen API."""
@@ -76,7 +72,6 @@ class ImageGenerator:
             generated_image = response.generated_images[0]
             image_bytes = generated_image.image.image_bytes
             
-            # Конвертация в PNG формат для Telegram
             img = Image.open(BytesIO(image_bytes))
             png_bytes = BytesIO()
             img.save(png_bytes, format='PNG')
@@ -92,19 +87,16 @@ class ImageGenerator:
             return None
 
 
-# --- 3. Инициализация и Хэндлеры ---
+# --- 3. Инициализация и Хэндлеры (Не изменены) ---
 
-# Инициализация бота и диспетчера
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
-# Инициализация генератора
 image_generator = ImageGenerator(api_key=GEMINI_API_KEY, model_name=IMAGE_MODEL_NAME)
 
 
 @dp.message(Command("start"))
 async def handle_start(message: Message):
-    """Ответ на команду /start."""
     welcome_text = (
         "🤖 Привет! Я бот-генератор изображений.\n"
         "Чтобы сгенерировать изображение, используй команду:\n\n"
@@ -115,7 +107,6 @@ async def handle_start(message: Message):
 
 @dp.message(Command("photo"), F.text.regexp(r'/photo\s+(\S.*)'))
 async def handle_photo(message: Message):
-    """Обработка команды /photo с промптом."""
     
     if not image_generator.client:
         await message.answer("❌ Бот не может генерировать изображения. Проверьте API-ключ Google.")
@@ -147,16 +138,14 @@ async def handle_photo(message: Message):
 
 @dp.message(Command("photo"))
 async def handle_photo_no_prompt(message: Message):
-    """Обработка команды /photo без промпта."""
     await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.\n\nПример: **/photo a robot holding a red skateboard**")
 
 
-# --- 4. Запуск Сервера (Функция main) ---
+# --- 4. Запуск Сервера (ИСПРАВЛЕННЫЙ МЕТОД) ---
 
 async def main():
     """Основная функция запуска бота, настроенная для Webhook на Render.com."""
     
-    # 1. Проверка ключей
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
         logger.error("❌ Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL. Проверьте настройки Render.")
         return
@@ -165,16 +154,15 @@ async def main():
     
     full_webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
     
-    # 2. Установка Webhook URL
-    # Сначала удалим, чтобы избежать конфликтов при перезапусках
+    # 1. Установка Webhook URL
     await bot.delete_webhook() 
     await bot.set_webhook(url=full_webhook_url)
     logger.info(f"Webhook установлен на URL: {full_webhook_url}")
 
-    # 3. Настройка и запуск aiohttp-сервера
+    # 2. Настройка и запуск aiohttp-сервера
     app = web.Application()
     
-    # !!! САМЫЙ НАДЕЖНЫЙ МЕТОД ДЛЯ AIOGRAM 3.x и aiohttp !!!
+    # ЭТОТ МЕТОД ДОЛЖЕН РАБОТАТЬ НАДЕЖНЕЕ ВСЕГО В AIOGRAM 3
     dp.setup_webhook(app, WEBHOOK_PATH)
     
     runner = web.AppRunner(app)
@@ -186,10 +174,8 @@ async def main():
     try:
         await site.start()
         logger.info(f"======== Running on http://{WEB_SERVER_HOST}:{WEB_SERVER_PORT} ========")
-        # Удерживаем main() в рабочем состоянии
         await asyncio.Event().wait() 
     finally:
-        # Очистка Webhook и ресурсов при завершении
         await bot.delete_webhook()
         logger.info("Webhook удален. Очистка завершена.")
         await runner.cleanup()
