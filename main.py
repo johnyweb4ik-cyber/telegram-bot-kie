@@ -8,7 +8,10 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import BufferedInputFile
 from aiogram.filters.command import Command
 from aiohttp import web
-from PIL import Image
+
+# --- ВНИМАНИЕ: PIL (Pillow) нужна для aiogram/фото, но не используется напрямую в этом фрагменте ---
+#from PIL import Image 
+# Если вы видите ошибку "NameError: name 'Image' is not defined", раскомментируйте строку выше.
 
 from google import genai
 from google.genai import types
@@ -18,32 +21,43 @@ from google.genai.errors import APIError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Получение переменных окружения (должны быть установлены в настройках хостинга) ---
-# Мы не используем load_dotenv(), полагаясь на переменные, инжектированные платформой.
+# --- Получение переменных окружения ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") # Например: https://your-render-service.onrender.com
-# Используем TG_WEBHOOK_SECRET для формирования безопасного пути
-WEBHOOK_SECRET = os.getenv("TG_WEBHOOK_SECRET", "default-secret-path") # Используем дефолтный путь, если секрет не установлен
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST") 
+WEBHOOK_SECRET = os.getenv("TG_WEBHOOK_SECRET", "default-secret-path")
 WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+# WEBHOOK_URL будет собран после проверки WEBHOOK_HOST
+
 WEB_SERVER_HOST = '0.0.0.0'
 WEB_SERVER_PORT = int(os.getenv("PORT", 8080))
 
 # --- Настройка моделей Gemini/Veo ---
-TEXT_MODEL = "gemini-2.5-flash-preview-09-2025"          # Для улучшения промптов
-VEO_MODEL = "veo-3.1-generate-preview"                  # Для генерации видео
+TEXT_MODEL = "gemini-2.5-flash-preview-09-2025"
+VEO_MODEL = "veo-3.1-generate-preview"
+
+
+# --- Диагностика переменных перед запуском ---
+logger.info("--- Проверка переменных окружения ---")
+logger.info(f"TELEGRAM_BOT_TOKEN: {'✅ Установлен' if TELEGRAM_BOT_TOKEN else '❌ НЕ УСТАНОВЛЕН'}")
+logger.info(f"GEMINI_API_KEY: {'✅ Установлен' if GEMINI_API_KEY else '❌ НЕ УСТАНОВЛЕН'}")
+logger.info(f"WEBHOOK_HOST: {WEBHOOK_HOST if WEBHOOK_HOST else '❌ НЕ УСТАНОВЛЕН'}")
+logger.info("-------------------------------------")
 
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY or not WEBHOOK_HOST:
-    # Проверка переменных окружения
+    # Определение, какие переменные отсутствуют
     error_vars = []
     if not TELEGRAM_BOT_TOKEN: error_vars.append("TELEGRAM_BOT_TOKEN")
     if not GEMINI_API_KEY: error_vars.append("GEMINI_API_KEY")
     if not WEBHOOK_HOST: error_vars.append("WEBHOOK_HOST")
     
-    logger.error(f"❌ Критическая ошибка: Отсутствуют необходимые переменные окружения: {', '.join(error_vars)}. Убедитесь, что они установлены в настройках хостинга.")
+    logger.error(f"❌ Критическая ошибка: Отсутствуют необходимые переменные окружения: {', '.join(error_vars)}. Приложение будет остановлено.")
     exit()
+
+# Если все переменные установлены, собираем URL
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
 
 # --- Инициализация клиентов ---
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -56,7 +70,7 @@ except Exception as e:
     exit()
 
 
-# --- Вспомогательные функции ---
+# --- Вспомогательные функции (оставлены без изменений) ---
 
 async def enhance_prompt(prompt: str) -> str:
     """Улучшает короткий пользовательский промпт, добавляя детали для лучшей генерации видео."""
@@ -89,8 +103,6 @@ async def veo_video_worker(chat_id: int, enhanced_prompt: str, status_message: t
     Принимает опциональные Base64-данные изображения (если это режим 'Изображение в Видео').
     """
     is_image_mode = image_input_data is not None
-    # 3 шага для "Изображение в Видео" (Загрузка/Промпт/Veo)
-    # 2 шага для "Текст в Видео" (Промпт/Veo)
     total_steps = 3 if is_image_mode else 2
     
     try:
@@ -102,7 +114,6 @@ async def veo_video_worker(chat_id: int, enhanced_prompt: str, status_message: t
             "config": types.GenerateVideosConfig(aspect_ratio="16:9") # Задаем соотношение сторон
         }
         
-        # Если предоставлено входное изображение, добавляем его в аргументы
         if is_image_mode:
             generate_args["image"] = image_input_data
             step_number = 2
@@ -158,14 +169,13 @@ async def veo_video_worker(chat_id: int, enhanced_prompt: str, status_message: t
             text=f"❌ **Критическая ошибка:** Что-то пошло не так при обработке запроса видео: {type(e).__name__}."
         )
     finally:
-        # Удаление сообщения о загрузке/статусе
         try:
              await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
         except Exception:
              pass 
 
 
-# --- Обработчики Telegram ---
+# --- Обработчики Telegram (оставлены без изменений) ---
 
 @dp.message(Command("start"))
 async def handle_start(message: types.Message):
@@ -207,7 +217,6 @@ async def handle_veo_prompt(message: types.Message):
         enhanced_prompt = await enhance_prompt(user_prompt)
         
         # 2. Запуск общего рабочего процесса Veo (без входного изображения)
-        # Воркер сам обновит статус на 1/2, когда будет готов к LRO
         await veo_video_worker(chat_id, enhanced_prompt, status_message, image_input_data=None)
 
     except Exception as e:
@@ -224,7 +233,6 @@ async def handle_user_photo(message: types.Message, bot: Bot):
     caption = message.caption or ""
     
     if not caption.lower().startswith('#veo'):
-        # Игнорируем фото без соответствующей подписи
         return
 
     user_prompt = caption[caption.lower().find('#veo') + len('#veo'):].strip()
@@ -234,7 +242,7 @@ async def handle_user_photo(message: types.Message, bot: Bot):
         return
 
     chat_id = message.chat.id
-    photo = message.photo[-1] # Получаем самое крупное фото
+    photo = message.photo[-1] 
     
     logger.info(f"Получен промпт для видео (Изображение в Видео): {user_prompt} от пользователя {message.from_user.id}")
 
@@ -258,7 +266,7 @@ async def handle_user_photo(message: types.Message, bot: Bot):
         image_input_data = {
             "inlineData": {
                 "data": image_base64,
-                "mimeType": "image/jpeg" # Предполагаем, что Telegram отправляет JPEG
+                "mimeType": "image/jpeg"
             }
         }
         
@@ -283,20 +291,18 @@ async def handle_user_photo(message: types.Message, bot: Bot):
         )
 
 
-# --- Настройка вебхука AIOHTTP ---
+# --- Настройка вебхука AIOHTTP (оставлены без изменений) ---
 
 async def on_startup(app):
     """Устанавливает вебхук при запуске приложения."""
     try:
         await bot.delete_webhook()
-        logger.info(f"Установка вебхука на: {WEBHOOK_URL}")
-        # Проверка, что WEBHOOK_HOST не пуст, прежде чем устанавливать вебхук
         if WEBHOOK_HOST:
+            logger.info(f"Установка вебхука на: {WEBHOOK_URL}")
             await bot.set_webhook(url=WEBHOOK_URL)
             logger.info(f"✅ Вебхук установлен: {WEBHOOK_URL}")
         else:
             logger.error("❌ WEBHOOK_HOST не установлен, вебхук не может быть настроен.")
-            # Не вызываем exit(), чтобы позволить веб-серверу запуститься, но ловим ошибку
             
     except Exception as e:
         logger.error(f"❌ Ошибка при установке вебхука: {e}")
@@ -313,7 +319,6 @@ async def on_shutdown(app):
 async def handle_webhook(request):
     """Обрабатывает входящие обновления от Telegram."""
     if request.path != WEBHOOK_PATH:
-        # Проверка пути для дополнительной безопасности
         return web.Response(text="Not Found", status=404)
         
     try:
@@ -325,7 +330,6 @@ async def handle_webhook(request):
         return web.Response()
     except Exception as e:
         logger.error(f"Ошибка обработки обновления: {e}", exc_info=True)
-        # Всегда возвращаем 200, чтобы Telegram не пытался отправить обновление снова
         return web.Response(status=200) 
 
 async def main():
@@ -341,13 +345,11 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     
-    # Для Render/Heroku нужно bind'ить к 0.0.0.0 и использовать PORT
     site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
     await site.start()
     
     logger.info("✅ Приложение успешно запущено и ожидает запросов от Telegram.")
     
-    # Запускаем бесконечный цикл, чтобы AIOHTTP продолжал работать
     while True:
         await asyncio.sleep(3600)
 
