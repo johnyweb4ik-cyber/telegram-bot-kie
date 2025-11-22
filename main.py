@@ -16,16 +16,15 @@ from PIL import Image
 
 # --- 1. Настройка и Константы ---
 
-# Загрузка переменных окружения из файла .env (важно для локального тестирования)
+# Загрузка переменных окружения из файла .env
 load_dotenv()
 
 # Получение ключей из переменных окружения
-# ВНИМАНИЕ: На Render.com убедитесь, что все имена переменных — в ВЕРХНЕМ РЕГИСТРЕ.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
 WEB_SERVER_HOST = "0.0.0.0"
-WEB_SERVER_PORT = int(os.environ.get("PORT", 10000)) # Используем порт 10000, требуемый Render.com
+WEB_SERVER_PORT = int(os.environ.get("PORT", 10000)) # Порт 10000 для Render.com
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
@@ -33,6 +32,7 @@ logger = logging.getLogger('generator')
 
 # Константы для Imagen
 IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
+# Формируем полный путь вебхука
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_BOT_TOKEN}"
 
 # --- 2. Класс для Генерации Изображений ---
@@ -42,7 +42,6 @@ class ImageGenerator:
     
     def __init__(self, api_key: str, model_name: str):
         if not api_key:
-            # Не вызываем исключение, чтобы не прервать инициализацию, но логируем ошибку
             logger.error("GEMINI_API_KEY не установлен.")
             self.client = None
             return
@@ -125,24 +124,19 @@ async def handle_photo(message: Message):
         await message.answer("❌ Бот не может генерировать изображения. Проверьте API-ключ Google.")
         return
 
-    # Получение промпта (текста после /photo)
     prompt = message.text.split(' ', 1)[1].strip()
     
     if not prompt:
         await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.")
         return
 
-    # Отправка сообщения о начале генерации
     status_message = await message.answer(f"⏳ Генерирую изображение по описанию: *{prompt}*...", parse_mode='Markdown')
     
-    # Вызов генератора
     image_bytes = await image_generator.generate_image(prompt)
     
-    # Удаление сообщения о статусе
     await bot.delete_message(message.chat.id, status_message.message_id)
 
     if image_bytes:
-        # Отправка изображения
         image_file = FSInputFile(BytesIO(image_bytes), filename='generated_image.png')
         await message.answer_photo(
             photo=image_file,
@@ -150,7 +144,6 @@ async def handle_photo(message: Message):
             parse_mode='Markdown'
         )
     else:
-        # Ответ в случае ошибки
         await message.answer(
             "❌ Не удалось сгенерировать изображение. Пожалуйста, попробуйте другое описание или проверьте логи сервера."
         )
@@ -181,7 +174,7 @@ async def main():
     # 3. Настройка и запуск aiohttp-сервера
     app = web.Application()
     
-    # Добавляем маршрут, который будет обрабатываться диспетчером Aiogram (v3)
+    # !!! ИСПРАВЛЕННАЯ СТРОКА: Использование dp.get_web_app_factory() для Aiogram v3 !!!
     app.router.add_route(
         "POST", WEBHOOK_PATH, dp.get_web_app_factory()
     )
