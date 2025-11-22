@@ -4,13 +4,13 @@ import asyncio
 import base64
 import json
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types # types здесь это aiogram.types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BufferedInputFile
 from aiogram.filters import Command
 from google import genai
-from google.genai import types # <--- ДОБАВЛЕН ИМПОРТ TYPES
+from google.genai import types as genai_types # Переименован импорт, чтобы избежать конфликта
 from google.genai.errors import APIError
 from aiohttp import web 
 
@@ -125,11 +125,11 @@ async def handle_photo(message: types.Message):
 
     try:
         # --- Шаг 1: Улучшение и перевод промпта (Текстовая модель) ---
-        # ИСПРАВЛЕНИЕ: Передача system_instruction через объект config
+        # ИСПРАВЛЕНИЕ: Используем genai_types.GenerateContentConfig
         text_response = gemini_client.models.generate_content(
             model=TEXT_MODEL,
             contents=[original_prompt],
-            config=types.GenerateContentConfig(
+            config=genai_types.GenerateContentConfig(
                 system_instruction=PROMPT_ENHANCER_SYSTEM_INSTRUCTION
             )
         )
@@ -191,7 +191,7 @@ async def handle_photo(message: types.Message):
         await message.answer(f"❌ **Ошибка Gemini API:** Произошла ошибка связи с сервисом.\n"
                              f"Детали: `{e}`")
     except Exception as e:
-        logger.error(f"Неизвестная ошибка: {e}")
+        logger.error(f"Неизвестная ошибка: {e}", exc_info=True)
         # Возвращаем общую ошибку, но логгируем детали
         await message.answer(f"❌ **Критическая ошибка:** Что-то пошло не так при обработке запроса. Детали: `{e}`") 
     finally:
