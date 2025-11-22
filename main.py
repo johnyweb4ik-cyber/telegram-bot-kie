@@ -2,6 +2,8 @@ import os
 import logging
 import requests
 import time
+import json
+import base64
 from flask import Flask, request
 
 logging.basicConfig(level=logging.INFO)
@@ -10,7 +12,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-KIE_API_KEY = os.environ.get('KIE_API_KEY')
+GEMINI_API_KEY = "AIzaSyCJXtPnJsFlEilLgJEZzCqtN3klDZrotWE"  # Твой ключ
 
 def setup_webhook():
     try:
@@ -32,227 +34,212 @@ def setup_webhook():
 
 setup_webhook()
 
-def generate_image(prompt):
+def generate_image_gemini(prompt):
+    """Генерация через Gemini API используя Imagen 3"""
     try:
-        url = "https://api.kie.ai/api/v1/flux/kontext/generate"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateContent"
         
         headers = {
-            "Authorization": f"Bearer {KIE_API_KEY}",
-            "Content-Type": "application/json"
+            'Content-Type': 'application/json',
+            'X-goog-api-key': GEMINI_API_KEY
         }
         
         data = {
-            "prompt": prompt,
-            "enableTranslation": True,
-            "aspectRatio": "1:1",
-            "outputFormat": "png",
-            "model": "flux-kontext-pro",
-            "promptUpsampling": False,
-            "safetyTolerance": 2
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": f"Сгенерируй изображение: {prompt}"
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "numberOfImages": 1
+            }
         }
         
-        logger.info(f"🔄 Отправка в KIE API...")
-        response = requests.post(url, json=data, headers=headers, timeout=60)
-        logger.info(f"📡 Ответ KIE: {response.status_code}")
+        logger.info(f"🔄 Отправка запроса к Gemini Imagen 3...")
+        response = requests.post(url, headers=headers, json=data, timeout=60)
+        logger.info(f"📡 Ответ Gemini: {response.status_code}")
         
         if response.status_code == 200:
             result = response.json()
-            logger.info(f"📦 Ответ создания задачи: {result}")
+            logger.info(f"📦 Ответ получен")
             
-            if result.get("code") == 200 and result.get("data"):
-                task_id = result["data"]["taskId"]
-                logger.info(f"✅ Задача создана: {task_id}")
-                
-                # Ждем 10 секунд перед первой проверкой (возможно задача индексируется)
-                logger.info("⏳ Ждем 10 секунд перед первой проверкой...")
-                time.sleep(10)
-                
-                return wait_for_image_result(task_id)
-            else:
-                logger.error(f"❌ Ошибка в ответе: {result}")
-                return None
+            # Парсим ответ чтобы найти URL изображения
+            if "candidates" in result and result["candidates"]:
+                candidate = result["candidates"][0]
+                if "content" in candidate and "parts" in candidate["content"]:
+                    for part in candidate["content"]["parts"]:
+                        if "inlineData" in part:
+                            image_data = part["inlineData"]["data"]
+                            # Конвертируем base64 в данные для Telegram
+                            return f"data:image/png;base64,{image_data}"
+            
+            logger.info(f"📋 Полный ответ: {result}")
+            return "Изображение сгенерировано, но не найден URL"
+            
         else:
-            logger.error(f"❌ Ошибка API: {response.status_code} - {response.text}")
+            logger.error(f"❌ Ошибка Gemini API: {response.status_code} - {response.text}")
             return None
             
     except Exception as e:
-        logger.error(f"❌ Ошибка генерации: {e}")
+        logger.error(f"❌ Ошибка генерации через Gemini: {e}")
         return None
 
-def wait_for_image_result(task_id):
-    """Пробуем разные endpoints для проверки статуса"""
-    
-    headers = {
-        "Authorization": f"Bearer {KIE_API_KEY}"
-    }
-    
-    # Пробуем разные возможные endpoints
-    endpoints_to_try = [
-        {
-            "url": "https://api.kie.ai/api/v1/flux/kontext/record-info",
-            "params": {"taskId": task_id},
-            "method": "GET"
-        },
-        {
-            "url": f"https://api.kie.ai/api/v1/task/{task_id}",
-            "params": {},
-            "method": "GET"
-        },
-        {
-            "url": "https://api.kie.ai/api/v1/task/status",
-            "params": {"taskId": task_id},
-            "method": "GET"
-        },
-        {
-            "url": f"https://api.kie.ai/api/v1/flux/kontext/task/{task_id}",
-            "params": {},
-            "method": "GET"
+def generate_image_gemini_direct(prompt):
+    """Альтернативный метод - используем text-to-image напрямую"""
+    try:
+        # Пробуем другой endpoint для генерации изображений
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateContent"
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': GEMINI_API_KEY
         }
-    ]
-    
-    logger.info(f"🔍 Начинаем отслеживание задачи: {task_id}")
-    
-    # Ждем до 5 минут с проверками каждые 15 секунд
-    for check_count in range(20):  # 20 * 15 сек = 5 минут
-        logger.info(f"⏳ Проверка {check_count+1}/20 задачи: {task_id}")
         
-        for endpoint in endpoints_to_try:
-            try:
-                logger.info(f"🔧 Пробуем endpoint: {endpoint['url']}")
-                
-                if endpoint["method"] == "GET":
-                    response = requests.get(
-                        endpoint["url"], 
-                        headers=headers, 
-                        params=endpoint["params"], 
-                        timeout=30
-                    )
-                else:
-                    response = requests.post(
-                        endpoint["url"],
-                        headers=headers,
-                        json=endpoint["params"],
-                        timeout=30
-                    )
-                
-                logger.info(f"📡 HTTP статус: {response.status_code} для {endpoint['url']}")
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    logger.info(f"📊 Успешный ответ от {endpoint['url']}:")
-                    logger.info(f"📊 Код: {result.get('code')}")
-                    logger.info(f"📊 Данные: {result.get('data')}")
-                    
-                    # Проверяем разные возможные структуры ответа
-                    if result.get("code") == 200:
-                        data = result.get("data", {})
-                        
-                        # Пробуем извлечь статус разными способами
-                        success_flag = data.get("successFlag")
-                        status = data.get("status")
-                        state = data.get("state")
-                        
-                        logger.info(f"📋 successFlag: {success_flag}, status: {status}, state: {state}")
-                        
-                        # Если задача завершена
-                        if (success_flag == 1 or status in ["completed", "success"] or 
-                            state in ["completed", "success"]):
-                            
-                            # Ищем URL изображения в разных возможных полях
-                            response_data = data.get("response", {})
-                            image_url = (response_data.get("resultImageUrl") or 
-                                       response_data.get("originImageUrl") or
-                                       data.get("imageUrl") or
-                                       data.get("url") or
-                                       response_data.get("url"))
-                            
-                            if image_url:
-                                logger.info(f"🎉 Изображение готово: {image_url}")
-                                return image_url
-                        
-                        # Если задача провалилась
-                        elif (success_flag == 2 or status in ["failed", "error"] or 
-                              state in ["failed", "error"]):
-                            error_msg = data.get("errorMessage", data.get("error", "Неизвестная ошибка"))
-                            logger.error(f"❌ Задача провалилась: {error_msg}")
-                            return None
-                
-                elif response.status_code == 404:
-                    logger.info(f"📋 Endpoint не найден: {endpoint['url']}")
-                    # Продолжаем пробовать другие endpoints
-                    continue
-                    
-                else:
-                    logger.info(f"📋 Другой статус {response.status_code} для {endpoint['url']}: {response.text}")
-                    
-            except Exception as e:
-                logger.error(f"❌ Ошибка проверки {endpoint['url']}: {e}")
+        # Более простая структура для генерации изображений
+        data = {
+            "prompt": prompt,
+            "numberOfImages": 1,
+            "aspectRatio": "1:1"
+        }
         
-        # Ждем 15 секунд перед следующей проверкой
-        logger.info("⏳ Ждем 15 секунд...")
-        time.sleep(15)
-    
-    logger.error("❌ Таймаут ожидания задачи")
-    return None
+        logger.info(f"🔄 Прямая генерация изображения...")
+        response = requests.post(url, headers=headers, json=data, timeout=60)
+        logger.info(f"📡 Ответ: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"✅ Изображение сгенерировано")
+            
+            # Ищем изображение в ответе
+            if "images" in result and result["images"]:
+                image_url = result["images"][0]
+                return image_url
+            else:
+                logger.info(f"📋 Структура ответа: {result}")
+                return "Генерация завершена"
+                
+        else:
+            logger.error(f"❌ Ошибка: {response.text}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка прямой генерации: {e}")
+        return None
 
 def process_message(chat_id, text):
     logger.info(f"🔧 Обработка: {text}")
     
     try:
         if text == '/start':
-            send_message(chat_id, "🎨 Бот для генерации изображений! Напиши описание картинки")
+            send_message(chat_id, 
+                "🎨 Бот для генерации изображений!\n\n"
+                "✨ Используем Google Gemini API\n"
+                "📝 Просто напиши описание картинки\n\n"
+                "Команды:\n"
+                "/generate - создать изображение\n" 
+                "/help - помощь"
+            )
             return
             
         if text == '/balance':
-            send_message(chat_id, "💰 Баланс: 10 кредитов")  
+            send_message(chat_id, 
+                "💰 Используем Google Gemini API\n\n"
+                "• Бесплатный лимит: 60 запросов/мин\n"
+                "• Качество: высокое\n"
+                "• Скорость: быстрая"
+            )  
             return
             
         if text in ['/help', '/generate']:
-            send_message(chat_id, "📝 Напиши описание картинки\n\nПример: 'Кот в космосе с ракетой'")
+            send_message(chat_id, 
+                "📝 Напиши описание картинки\n\n"
+                "Примеры:\n"
+                "• 'Кот в космосе'\n" 
+                "• 'Город будущего'\n"
+                "• 'Закат на пляже'\n"
+                "• 'Робот читает книгу'"
+            )
             return
         
-        # Генерация
+        # Генерация через Gemini API
         logger.info(f"🎨 Генерация: {text}")
-        send_message(chat_id, f"🔄 Генерирую: '{text}'...\nЭто займет 1-5 минут ⏳")
+        send_message(chat_id, f"🔄 Генерирую: '{text}'...\nИспользую Google Gemini 🚀")
         
-        image_url = generate_image(text)
+        # Пробуем первый метод
+        image_data = generate_image_gemini(text)
         
-        if image_url:
-            if image_url.startswith(('http://', 'https://')):
+        if image_data:
+            if image_data.startswith(('http://', 'https://', 'data:image')):
                 logger.info(f"✅ Успех! Отправляем изображение...")
-                send_telegram_photo(chat_id, image_url, text)
+                send_telegram_photo(chat_id, image_data, text)
             else:
-                logger.info(f"📋 Результат: {image_url}")
-                send_message(chat_id, f"📋 Статус: {image_url}")
+                logger.info(f"📋 Результат: {image_data}")
+                send_message(chat_id, f"📋 Статус: {image_data}")
         else:
-            logger.error("❌ Генерация не удалась")
-            send_message(chat_id, "❌ Ошибка генерации. Попробуй другой запрос.")
+            # Пробуем второй метод
+            logger.info("🔄 Пробуем альтернативный метод...")
+            image_data = generate_image_gemini_direct(text)
+            
+            if image_data:
+                if image_data.startswith(('http://', 'https://', 'data:image')):
+                    send_telegram_photo(chat_id, image_data, text)
+                else:
+                    send_message(chat_id, f"📋 Результат: {image_data}")
+            else:
+                logger.error("❌ Оба метода не сработали")
+                send_message(chat_id, 
+                    "❌ Ошибка генерации\n\n"
+                    "Попробуй:\n"
+                    "• Другой запрос\n" 
+                    "• Подожди немного\n"
+                    "• Проверь API ключ"
+                )
             
     except Exception as e:
         logger.error(f"💥 Ошибка: {e}")
         send_message(chat_id, "❌ Произошла ошибка")
 
-def send_telegram_photo(chat_id, image_url, prompt):
+def send_telegram_photo(chat_id, image_data, prompt):
+    """Отправка фото в Telegram"""
     try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-            json={
-                "chat_id": chat_id,
-                "photo": image_url,
-                "caption": f"🎨 Сгенерировано: '{prompt}'"
-            },
-            timeout=30
-        )
+        if image_data.startswith('data:image'):
+            # Для base64 данных
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data={
+                    'chat_id': chat_id,
+                    'caption': f"🎨 Gemini API: '{prompt}'"
+                },
+                files={
+                    'photo': ('image.png', base64.b64decode(image_data.split(',')[1]), 'image/png')
+                },
+                timeout=30
+            )
+        else:
+            # Для URL
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                json={
+                    'chat_id': chat_id,
+                    'photo': image_data,
+                    'caption': f"🎨 Gemini API: '{prompt}'"
+                },
+                timeout=30
+            )
         
         if response.status_code == 200:
             logger.info(f"✅ Фото отправлено в Telegram")
         else:
             logger.error(f"❌ Ошибка отправки фото: {response.text}")
-            send_message(chat_id, f"🎨 Сгенерировано! Ссылка: {image_url}")
+            send_message(chat_id, f"🎨 Сгенерировано! Ошибка отправки: {response.text}")
             
     except Exception as e:
         logger.error(f"❌ Ошибка отправки фото: {e}")
-        send_message(chat_id, f"🎨 Сгенерировано! Ссылка: {image_url}")
+        send_message(chat_id, f"🎨 Сгенерировано! Ошибка отправки")
 
 def send_message(chat_id, text):
     try:
@@ -267,7 +254,7 @@ def send_message(chat_id, text):
 
 @app.route('/')
 def home():
-    return "Бот работает! ✅"
+    return "Бот работает! ✅ Google Gemini API"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
