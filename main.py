@@ -6,7 +6,7 @@ from io import BytesIO
 
 # --- Импорты Aiogram и Google GenAI ---
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, Update # Добавлен Update
 from aiogram.filters import Command
 from aiohttp import web
 
@@ -150,15 +150,43 @@ async def handle_photo_no_prompt(message: Message):
     await message.answer("Пожалуйста, укажите описание для изображения после команды /photo.\n\nПример: **/photo a robot holding a red skateboard**")
 
 
-# --- 4. Запуск Сервера (Паттерн Aiogram v2/Ранний v3 с setup_webhook) ---
+# --- 4. Запуск Сервера (ФИНАЛЬНЫЙ МЕТОД: Прямое управление Aiohttp/Aiogram v3) ---
+
+async def handle_telegram_updates(request: web.Request):
+    """
+    Обрабатывает входящие обновления от Telegram и передает их диспетчеру.
+    Путь в aiohttp должен содержать переменную '{token}'
+    """
+    # Проверяем токен в URL для безопасности, сравнивая с фактическим токеном бота
+    if request.match_info.get("token") != TELEGRAM_BOT_TOKEN:
+        return web.Response(status=401)
+        
+    data = await request.json()
+    
+    # Прямая передача данных обновления диспетчеру
+    try:
+        # Создаем объект Update из полученных данных
+        update = Update.model_validate(data)
+        
+        # Aiogram 3.x использует process_update
+        await dp.process_update(update, bot=bot)
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки обновления: {e}")
+        # Всегда возвращаем 200 OK, чтобы Telegram не пересылал запрос
+        return web.Response(text="OK")
+    
+    return web.Response(text="OK")
+
 
 async def on_startup(app):
     """Вызывается при запуске aiohttp-приложения."""
     if not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
-        logger.error("❌ Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL. Проверьте настройки Render.")
+        logger.error("❌ Не установлены TELEGRAM_BOT_TOKEN или WEBHOOK_URL.")
         return
         
-    full_webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+    # Путь вебхука на Render должен содержать токен в качестве переменной
+    full_webhook_url = f"{WEBHOOK_URL}/webhook/{TELEGRAM_BOT_TOKEN}"
     
     # 1. Установка Webhook URL
     await bot.delete_webhook()
@@ -170,40 +198,16 @@ async def on_shutdown(app):
     logger.info("Удаление Webhook...")
     await bot.delete_webhook()
     logger.info("Webhook удален.")
-    # В v2 использовался dp.stop_polling() или dp.shutdown()
-    try:
-        await dp.shutdown() 
-    except Exception:
-        pass
-
+    await dp.shutdown()
 
 async def main():
     """Основная функция запуска бота, настроенная для Webhook на Render.com."""
     
     app = web.Application()
     
-    # В Aiogram v2/раннем v3 использовался setup_webhook. 
-    # В v3.22.0 его нет, но поскольку все v3-методы не сработали, мы делаем двойную проверку.
-    
-    try:
-        # Пытаемся использовать setup_webhook (v2/ранний v3)
-        dp.setup_webhook(app, path=WEBHOOK_PATH)
-        logger.info("Использован dp.setup_webhook.")
-    except AttributeError:
-        try:
-            # Пытаемся использовать create_request_handler (v3.22.0 - предыдущая попытка)
-            webhook_request_handler = dp.create_request_handler(bot) 
-            app.router.add_route(
-                "POST", 
-                WEBHOOK_PATH, 
-                webhook_request_handler 
-            )
-            logger.info("Использован dp.create_request_handler.")
-        except AttributeError:
-            # Это означает, что ни один из известных методов V2 или V3 не работает. 
-            # Это критическая ошибка конфигурации.
-            logger.error("Критическая ошибка: Диспетчер не имеет ни 'setup_webhook', ни 'create_request_handler'.")
-            return
+    # 2. Прямая регистрация хэндлера обновления (самый низкий уровень v3)
+    # Используем путь с переменной токена, чтобы aiohttp передал его в хэндлер
+    app.router.add_post(f"/webhook/{{token}}", handle_telegram_updates)
             
     
     # Настройка хуков жизненного цикла aiohttp
@@ -211,18 +215,25 @@ async def main():
     app.on_shutdown.append(on_shutdown)
     
     # Запуск сервера
-    # В Aiogram 2 использовался execute(dp, skip_updates=True, on_startup=on_startup, ...)
-    # В Aiohttp/Render используем run_app
-    web.run_app(
-        app,
-        host=WEB_SERVER_HOST,
-        port=WEB_SERVER_PORT
-    )
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
+    
+    try:
+        await site.start()
+        logger.info(f"======== Running on http://{WEB_SERVER_HOST}:{WEB_SERVER_PORT} ========")
+        # Удерживаем main() в рабочем состоянии
+        await asyncio.Event().wait() 
+    finally:
+        # Очистка Webhook и ресурсов при завершении
+        await bot.delete_webhook()
+        logger.info("Webhook удален. Очистка завершена.")
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
     try:
-        # Запуск асинхронного main
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен вручную.")
