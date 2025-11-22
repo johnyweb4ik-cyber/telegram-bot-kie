@@ -62,14 +62,14 @@ def generate_image_gemini(prompt):
         logger.info(f"📝 Английский промпт: {english_prompt}")
         
         # Теперь генерируем изображение через Imagen 3
-        return generate_with_imagen3(english_prompt)
+        return generate_with_imagen3_simple(english_prompt)
             
     except Exception as e:
         logger.error(f"❌ Ошибка создания промпта: {e}")
         return None
 
-def generate_with_imagen3(prompt):
-    """Генерация через Imagen 3 REST API с правильной структурой"""
+def generate_with_imagen3_simple(prompt):
+    """Упрощенная генерация через Imagen 3 - только промпт"""
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateContent?key={GEMINI_API_KEY}"
         
@@ -77,7 +77,7 @@ def generate_with_imagen3(prompt):
             'Content-Type': 'application/json'
         }
         
-        # ПРАВИЛЬНАЯ структура для Imagen 3
+        # САМАЯ ПРОСТАЯ структура - только промпт
         data = {
             "contents": [
                 {
@@ -87,14 +87,11 @@ def generate_with_imagen3(prompt):
                         }
                     ]
                 }
-            ],
-            "generation_config": {
-                "number_of_images": 1,  # Правильное имя параметра
-                "aspect_ratio": "1:1"   # Правильное имя параметра
-            }
+            ]
+            # Убираем generation_config полностью
         }
         
-        logger.info(f"🔄 Отправка запроса к Imagen 3...")
+        logger.info(f"🔄 Отправка упрощенного запроса к Imagen 3...")
         response = requests.post(url, headers=headers, json=data, timeout=60)
         logger.info(f"📡 Ответ Imagen 3: {response.status_code}")
         
@@ -112,20 +109,13 @@ def generate_with_imagen3(prompt):
                             return f"data:image/png;base64,{image_data}"
             
             # Если не нашли изображение, логируем структуру
-            logger.info(f"📋 Структура ответа: {json.dumps(result, indent=2)[:500]}...")
+            logger.info(f"📋 Полная структура ответа: {json.dumps(result, indent=2)}")
             return "Изображение создано, но не найден URL в ответе"
             
         else:
             error_text = response.text
             logger.error(f"❌ Ошибка Imagen 3: {error_text}")
-            
-            # Проверяем конкретные ошибки
-            if "quota" in error_text.lower():
-                return "❌ Закончилась квота API. Проверь лимиты в Google AI Studio."
-            elif "invalid" in error_text.lower():
-                return "❌ Неверный запрос или параметры. Попробуй другой промпт."
-            else:
-                return f"❌ Ошибка API: {error_text[:100]}"
+            return f"❌ Ошибка API: {error_text}"
             
     except Exception as e:
         logger.error(f"❌ Ошибка генерации: {e}")
