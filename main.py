@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BufferedInputFile
-from aiogram.filters import Command # <-- ИСПРАВЛЕНИЕ: Импортируем Command из aiogram.filters
+from aiogram.filters import Command # <-- ВАЖНО: Правильный импорт фильтра Command для Aiogram v3+
 from google import genai
 from google.genai.errors import APIError
 from aiohttp import web 
@@ -63,7 +63,7 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN,
 
 # --- Хэндлеры ---
 
-@dp.message(Command("start")) # <-- ИСПРАВЛЕНИЕ
+@dp.message(Command("start")) # <-- ИСПРАВЛЕНИЕ: Используем импортированный Command
 async def handle_start(message: types.Message):
     """Обрабатывает команду /start, отправляя приветственное сообщение."""
     greeting_text = (
@@ -75,7 +75,7 @@ async def handle_start(message: types.Message):
     )
     await message.answer(greeting_text)
 
-@dp.message(Command("photo")) # <-- ИСПРАВЛЕНИЕ
+@dp.message(Command("photo")) # <-- ИСПРАВЛЕНИЕ: Используем импортированный Command
 async def handle_photo(message: types.Message):
     """
     Основной хэндлер. 
