@@ -23,12 +23,17 @@ load_dotenv()
 # --- Константы и конфигурация ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# ВАЖНОЕ ИСПРАВЛЕНИЕ: Используем отдельный, безопасный секретный токен.
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
 WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN") 
-WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET_TOKEN}" # Используем секретный токен в пути
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+# Убедимся, что все ключевые переменные установлены до создания URL
+if WEBHOOK_HOST and WEBHOOK_SECRET_TOKEN:
+    WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET_TOKEN}" 
+    WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+else:
+    WEBHOOK_PATH = None
+    WEBHOOK_URL = None
+
 
 # Модели
 TEXT_MODEL = "gemini-2.5-flash-preview-09-2025"  
@@ -39,7 +44,7 @@ PROMPT_ENHANCER_SYSTEM_INSTRUCTION = (
     "You are a highly skilled prompt engineer and translator. "
     "Your task is to take a user's prompt, which may be short, vague, or in Russian, and transform it "
     "into a detailed, artistic, and evocative image generation prompt in **perfect English**. "
-    "You must add style, detail, and artistic flair (e.g., 'hyper-realistic', 'cinematic lighting', 'digital painting'). "
+    "Must add style, detail, and artistic flair (e.g., 'hyper-realistic', 'cinematic lighting', 'digital painting'). "
     "Do not include any commentary, explanations, or extraneous text. "
     "Respond ONLY with the enhanced English prompt."
 )
@@ -58,9 +63,12 @@ else:
 # Инициализация Telegram Bot
 if not TELEGRAM_BOT_TOKEN:
     logger.error("Переменная TELEGRAM_BOT_TOKEN не найдена!")
-    exit(1)
+    bot_token_to_use = "PLACEHOLDER_TOKEN_IF_MISSING" 
+else:
+    bot_token_to_use = TELEGRAM_BOT_TOKEN
+
 dp = Dispatcher()
-bot = Bot(token=TELEGRAM_BOT_TOKEN, 
+bot = Bot(token=bot_token_to_use, 
           default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 # --- Хэндлеры ---
@@ -68,6 +76,10 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN,
 @dp.message(Command("start")) 
 async def handle_start(message: types.Message):
     """Обрабатывает команду /start, отправляя приветственное сообщение."""
+    if bot.token == "PLACEHOLDER_TOKEN_IF_MISSING":
+         await message.answer("❌ Бот не запущен! Проверьте, что переменная TELEGRAM_BOT_TOKEN установлена в настройках Render.")
+         return
+         
     greeting_text = (
         "👋 **Привет! Я бот-генератор изображений на базе Gemini AI.**\n\n"
         "Чтобы создать картинку, используйте команду `/photo` и добавьте описание.\n"
@@ -155,7 +167,6 @@ async def handle_photo(message: types.Message):
             )
             
         else:
-            # Обработка ошибок, если данные изображения отсутствуют
             finish_reason = candidate.finish_reason.name if candidate and candidate.finish_reason else "UNKNOWN"
             
             if finish_reason == "SAFETY":
@@ -197,38 +208,29 @@ async def handle_text(message: types.Message):
 async def set_telegram_webhook():
     """Устанавливает вебхук на URL хостинга (Render)."""
     
-    if not WEBHOOK_HOST:
-        logger.error("Переменная RENDER_EXTERNAL_URL не найдена. Запуск в режиме long-polling.")
-        await dp.start_polling(bot)
-        return
+    # 1. Проверяем, что есть все, что нужно для URL и токена
+    if not WEBHOOK_HOST or not WEBHOOK_URL or not WEBHOOK_SECRET_TOKEN:
+        logger.error("❌ Невозможно установить вебхук: RENDER_EXTERNAL_URL, WEBHOOK_SECRET_TOKEN или полный WEBHOOK_URL отсутствует.")
+        return False
         
-    if not TELEGRAM_BOT_TOKEN or not WEBHOOK_SECRET_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN или WEBHOOK_SECRET_TOKEN не установлен, невозможно установить вебхук.")
-        return
-
     logger.info(f"Установка вебхука на: {WEBHOOK_URL}")
     
-    # ИСПРАВЛЕНО: Теперь используем WEBHOOK_SECRET_TOKEN
     await bot.set_webhook(
         url=WEBHOOK_URL,
         secret_token=WEBHOOK_SECRET_TOKEN 
     )
     logger.info(f"✅ Вебхук установлен: {WEBHOOK_URL}")
+    return True
 
 async def main():
     """Основная точка входа в приложение."""
     
-    try:
-        # 1. Настройка вебхука (или запуск long-polling)
-        await set_telegram_webhook()
-    except Exception as e:
-        logger.error(f"Критическая ошибка установки вебхука: Telegram server says - {e}")
-        # Если вебхук установить не удалось, приложение должно упасть, чтобы Render перезапустил его
+    # Сначала пытаемся установить вебхук
+    webhook_success = await set_telegram_webhook()
+    
+    if not webhook_success:
+        logger.error("❌ Бот не запустился из-за отсутствия критических переменных окружения.")
         return 
-
-    # Если мы в режиме long-polling, то дальнейший код aiohttp не нужен
-    if not WEBHOOK_HOST:
-        return
 
     # 2. Запуск aiohttp сервера для обработки вебхуков
     
@@ -249,8 +251,9 @@ async def main():
 
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, webhook_handler)
-    app.router.add_get("/", health_check_handler) 
-    app.router.add_head("/", health_check_handler)
+    
+    # ИСПРАВЛЕНИЕ ОШИБКИ HEAD: Явное указание только GET-метода
+    app.router.add_route("GET", "/", health_check_handler) 
 
     # Порт, который предоставляет хостинг (например, Render)
     port = int(os.getenv("PORT", 8080)) 
@@ -263,6 +266,7 @@ async def main():
     await site.start()
 
     # Бесконечный цикл для поддержания работы
+    logger.info("✅ Приложение успешно запущено и ожидает запросов от Telegram.")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
