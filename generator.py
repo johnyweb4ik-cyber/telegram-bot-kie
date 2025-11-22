@@ -32,8 +32,7 @@ class GeminiGenerator:
         logger.info(f"Запрос генерации изображения: {prompt[:50]}...")
         try:
             # Вызов генерации изображения
-            # Здесь используются синхронные методы клиента, но они выполняются
-            # в отдельном потоке (Thread) благодаря асинхронным возможностям Python.
+            # Используем client.models.generate_images - правильный метод для Imagen
             result = self.client.models.generate_images(
                 model=self.image_model,
                 prompt=prompt,
@@ -57,6 +56,7 @@ class GeminiGenerator:
                 return None
             
         except APIError as e:
+            # Ловит ошибки, связанные с доступом к модели (как ошибка 404, которую вы показывали)
             logger.error(f"Ошибка API при генерации изображения: {e}")
             return None
         except Exception as e:
@@ -67,7 +67,7 @@ class GeminiGenerator:
         """
         Концептуальная заглушка для генерации видео. 
         
-        Реальная генерация видео требует более сложной интеграции 
+        На практике: реальная генерация видео требует более сложной интеграции 
         и длительных асинхронных операций.
         """
         logger.info(f"Получен запрос на генерацию видео: {prompt}")
