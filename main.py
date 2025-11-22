@@ -34,7 +34,6 @@ setup_webhook()
 
 def generate_image(prompt):
     try:
-        # Правильный endpoint для генерации изображений
         url = "https://api.kie.ai/api/v1/flux/kontext/generate"
         
         headers = {
@@ -44,15 +43,15 @@ def generate_image(prompt):
         
         data = {
             "prompt": prompt,
-            "enableTranslation": True,  # Автоматический перевод на английский
-            "aspectRatio": "1:1",       # Квадратное изображение
+            "enableTranslation": True,
+            "aspectRatio": "1:1",
             "outputFormat": "png",
             "model": "flux-kontext-pro",
             "promptUpsampling": False,
             "safetyTolerance": 2
         }
         
-        logger.info(f"🔄 Отправка в KIE API Flux Kontext...")
+        logger.info(f"🔄 Отправка в KIE API...")
         response = requests.post(url, json=data, headers=headers, timeout=60)
         logger.info(f"📡 Ответ KIE: {response.status_code}")
         
@@ -63,8 +62,6 @@ def generate_image(prompt):
             if result.get("code") == 200 and result.get("data"):
                 task_id = result["data"]["taskId"]
                 logger.info(f"✅ Задача создана: {task_id}")
-                
-                # Ждем завершения генерации и получаем результат
                 return wait_for_image_result(task_id)
             else:
                 logger.error(f"❌ Ошибка в ответе: {result}")
@@ -78,39 +75,67 @@ def generate_image(prompt):
         return None
 
 def wait_for_image_result(task_id):
-    """Ожидаем завершения генерации и получаем URL изображения"""
+    """Ожидаем завершения генерации"""
     try:
         url = f"https://api.kie.ai/api/v1/task/{task_id}"
         headers = {
             "Authorization": f"Bearer {KIE_API_KEY}"
         }
         
-        # Ждем до 2 минут с проверками каждые 5 секунд
-        for i in range(24):
-            logger.info(f"⏳ Проверка задачи {task_id}... ({i+1}/24)")
+        # Ждем до 3 минут с проверками каждые 10 секунд
+        for i in range(18):  # 18 * 10 сек = 3 минуты
+            logger.info(f"⏳ Проверка задачи {task_id}... ({i+1}/18)")
             
-            response = requests.get(url, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"📊 Статус задачи: {result}")
+            try:
+                response = requests.get(url, headers=headers, timeout=30)
                 
-                if result.get("code") == 200 and result.get("data"):
-                    task_data = result["data"]
-                    status = task_data.get("status")
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(f"📊 Статус ответа: {result}")
                     
-                    if status == "completed":
-                        # Изображение готово
-                        if task_data.get("imageUrl"):
-                            image_url = task_data["imageUrl"]
-                            logger.info(f"🎉 Изображение готово: {image_url}")
-                            return image_url
+                    # Проверяем разные возможные структуры ответа
+                    if result.get("code") == 200:
+                        data = result.get("data", {})
+                        
+                        # Проверяем статус задачи
+                        status = data.get("status")
+                        logger.info(f"📋 Статус задачи: {status}")
+                        
+                        if status == "completed":
+                            # Ищем URL изображения в разных возможных полях
+                            image_url = (data.get("imageUrl") or 
+                                       data.get("url") or 
+                                       data.get("image_url"))
+                            
+                            if image_url:
+                                logger.info(f"🎉 Изображение готово: {image_url}")
+                                return image_url
+                            else:
+                                logger.info(f"📋 Данные completed задачи: {data}")
+                        
+                        elif status == "failed":
+                            error_msg = data.get("error", "Неизвестная ошибка")
+                            logger.error(f"❌ Задача провалилась: {error_msg}")
+                            return None
+                        
+                        elif status == "processing":
+                            logger.info("🔄 Задача в процессе...")
+                            # Продолжаем ждать
+                            
+                        else:
+                            logger.info(f"📋 Неизвестный статус: {status}")
+                            logger.info(f"📋 Полные данные: {data}")
                     
-                    elif status == "failed":
-                        logger.error(f"❌ Задача провалилась: {task_data}")
-                        return None
+                    else:
+                        logger.error(f"❌ Ошибка в ответе задачи: {result}")
+                
+                else:
+                    logger.error(f"❌ Ошибка HTTP: {response.status_code} - {response.text}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Ошибка проверки задачи: {e}")
             
-            time.sleep(5)  # Ждем 5 секунд перед следующей проверкой
+            time.sleep(10)  # Ждем 10 секунд перед следующей проверкой
         
         logger.error("❌ Таймаут ожидания задачи")
         return None
@@ -132,12 +157,12 @@ def process_message(chat_id, text):
             return
             
         if text in ['/help', '/generate']:
-            send_message(chat_id, "📝 Напиши описание картинки на русском или английском\n\nПример: 'Кот в космосе с ракетой'")
+            send_message(chat_id, "📝 Напиши описание картинки\n\nПример: 'Кот в космосе с ракетой'")
             return
         
         # Генерация
         logger.info(f"🎨 Генерация: {text}")
-        send_message(chat_id, f"🔄 Генерирую: '{text}'...\nЭто займет 1-2 минуты ⏳")
+        send_message(chat_id, f"🔄 Генерирую: '{text}'...\nЭто займет 1-3 минуты ⏳")
         
         image_url = generate_image(text)
         
@@ -146,7 +171,7 @@ def process_message(chat_id, text):
             send_telegram_photo(chat_id, image_url, text)
         else:
             logger.error("❌ Генерация не удалась")
-            send_message(chat_id, "❌ Ошибка генерации. Попробуй другой запрос.")
+            send_message(chat_id, "❌ Ошибка генерации. Попробуй другой запрос или позже.")
             
     except Exception as e:
         logger.error(f"💥 Ошибка: {e}")
@@ -168,7 +193,6 @@ def send_telegram_photo(chat_id, image_url, prompt):
             logger.info(f"✅ Фото отправлено в Telegram")
         else:
             logger.error(f"❌ Ошибка отправки фото: {response.text}")
-            # Если не получилось отправить фото, отправляем ссылку
             send_message(chat_id, f"🎨 Сгенерировано! Ссылка: {image_url}")
             
     except Exception as e:
@@ -188,7 +212,7 @@ def send_message(chat_id, text):
 
 @app.route('/')
 def home():
-    return "Бот работает! ✅ Flux Kontext API"
+    return "Бот работает! ✅"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
